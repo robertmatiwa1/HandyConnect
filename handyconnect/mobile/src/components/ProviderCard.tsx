@@ -8,10 +8,14 @@ export interface Provider {
   name: string;
   skill: string;
   suburb: string;
-  hourlyRate?: number;
-  rating?: number;
+  hourlyRate?: number | null;
+  rating?: number | null;
   ratingCount?: number;
-  bio?: string;
+  bio?: string | null;
+  experienceYears?: number | null;
+  verified?: boolean;
+  photoUrl?: string | null;
+  portfolio?: string[];
 }
 
 interface ProviderCardProps {

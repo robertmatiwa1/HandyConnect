@@ -13,12 +13,39 @@ enum Role {
 }
 
 model User {
-  id                     String   @id @default(uuid())
-  email                  String   @unique
-  password               String
-  name                   String
-  role                   Role
-  emailVerificationCode  String?  @unique
-  createdAt              DateTime @default(now())
-  updatedAt              DateTime @updatedAt
+  id                    String           @id @default(uuid())
+  email                 String           @unique
+  password              String
+  name                  String
+  role                  Role
+  emailVerificationCode String?          @unique
+  createdAt             DateTime         @default(now())
+  updatedAt             DateTime         @updatedAt
+  providerProfile       ProviderProfile?
+}
+
+model ProviderProfile {
+  id              String   @id @default(uuid())
+  userId          String   @unique
+  user            User     @relation(fields: [userId], references: [id])
+  skill           String
+  suburb          String
+  hourlyRate      Int?
+  bio             String?
+  experienceYears Int?
+  verified        Boolean  @default(false)
+  photoUrl        String?
+  portfolio       String[] @default([])
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  reviews         Review[]
+}
+
+model Review {
+  id         String          @id @default(uuid())
+  providerId String
+  provider   ProviderProfile @relation(fields: [providerId], references: [id], onDelete: Cascade)
+  rating     Int
+  comment    String?
+  createdAt  DateTime        @default(now())
 }

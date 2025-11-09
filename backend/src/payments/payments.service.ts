@@ -1,3 +1,5 @@
+import { Injectable, NotFoundException } from '@nestjs/common';
+
 export enum PaymentStatus {
   PENDING = 'PENDING',
   ESCROW = 'ESCROW',
@@ -18,6 +20,7 @@ export interface CheckoutResult {
   checkoutUrl: string;
 }
 
+@Injectable()
 export class PaymentsService {
   private payments: Map<string, Payment> = new Map();
 
@@ -60,7 +63,7 @@ export class PaymentsService {
   private getPaymentOrThrow(paymentId: string): Payment {
     const payment = this.payments.get(paymentId);
     if (!payment) {
-      throw new Error(`Payment with id ${paymentId} not found`);
+      throw new NotFoundException(`Payment with id ${paymentId} not found`);
     }
     return payment;
   }
@@ -73,5 +76,3 @@ export class PaymentsService {
     return `https://payments.example.com/${method}/checkout/${paymentId}`;
   }
 }
-
-export const paymentsService = new PaymentsService();

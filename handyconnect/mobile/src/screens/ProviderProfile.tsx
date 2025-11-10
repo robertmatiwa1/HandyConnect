@@ -16,6 +16,7 @@ import Rating from '../components/Rating';
 import { Provider } from '../components/ProviderCard';
 import { RootStackParamList } from '../navigation/RootNavigator';
 import { formatCurrency } from '../utils/format';
+import { useProvidersStore } from '../store/providers';
 
 type NavigationProp = NativeStackNavigationProp<RootStackParamList, 'ProviderProfile'>;
 type ProfileRouteProp = RouteProp<RootStackParamList, 'ProviderProfile'>;
@@ -26,6 +27,13 @@ interface ProviderProfileResponse extends Provider {
   portfolio: string[];
 }
 
+interface ProviderReview {
+  id: string;
+  rating: number;
+  comment: string | null;
+  createdAt: string;
+}
+
 const ProviderProfile: React.FC = () => {
   const navigation = useNavigation<NavigationProp>();
   const { params } = useRoute<ProfileRouteProp>();
@@ -33,6 +41,10 @@ const ProviderProfile: React.FC = () => {
   const [profile, setProfile] = useState<ProviderProfileResponse | null>(null);
   const [loading, setLoading] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
+  const [reviews, setReviews] = useState<ProviderReview[]>([]);
+  const [reviewsLoading, setReviewsLoading] = useState<boolean>(false);
+  const providerFromStore = useProvidersStore((state) => state.providers[provider.id]);
+  const updateProvider = useProvidersStore((state) => state.updateProvider);
 
   const fetchProfile = useCallback(async () => {
     try {
@@ -40,10 +52,23 @@ const ProviderProfile: React.FC = () => {
       setError(null);
       const response = await api.get<ProviderProfileResponse>(`/providers/${provider.id}`);
       setProfile(response.data);
+      updateProvider(response.data);
     } catch (err) {
       setError('Unable to load provider details. Please try again later.');
     } finally {
       setLoading(false);
+    }
+  }, [provider.id, updateProvider]);
+
+  const fetchReviews = useCallback(async () => {
+    try {
+      setReviewsLoading(true);
+      const response = await api.get<ProviderReview[]>(`/reviews/provider/${provider.id}`);
+      setReviews(response.data);
+    } catch (err) {
+      setReviews([]);
+    } finally {
+      setReviewsLoading(false);
     }
   }, [provider.id]);
 
@@ -51,13 +76,27 @@ const ProviderProfile: React.FC = () => {
     fetchProfile();
   }, [fetchProfile]);
 
+  useEffect(() => {
+    fetchReviews();
+  }, [fetchReviews]);
+
   const displayProvider = useMemo<Provider>(() => ({
     ...provider,
+    ...(providerFromStore ?? {}),
     ...profile,
-  }), [profile, provider]);
+  }), [profile, provider, providerFromStore]);
 
   const handleBook = () => {
     navigation.navigate('Booking', { provider: displayProvider });
+  };
+
+  const formatReviewDate = (value: string) => {
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) {
+      return '';
+    }
+
+    return date.toLocaleDateString();
   };
 
   return (
@@ -83,6 +122,22 @@ const ProviderProfile: React.FC = () => {
         <Text style={styles.rate}>Hourly rate: {formatCurrency(displayProvider.hourlyRate)}</Text>
       ) : null}
       {displayProvider.bio ? <Text style={styles.bio}>{displayProvider.bio}</Text> : null}
+      <View style={styles.section}>
+        <Text style={styles.sectionTitle}>Reviews</Text>
+        {reviewsLoading ? (
+          <ActivityIndicator size="small" color="#1f6feb" />
+        ) : reviews.length === 0 ? (
+          <Text style={styles.emptyReviews}>No reviews yet.</Text>
+        ) : (
+          reviews.map((review) => (
+            <View key={review.id} style={styles.reviewCard}>
+              <Rating value={review.rating} />
+              {review.comment ? <Text style={styles.reviewComment}>{review.comment}</Text> : null}
+              <Text style={styles.reviewDate}>{formatReviewDate(review.createdAt)}</Text>
+            </View>
+          ))
+        )}
+      </View>
       {displayProvider.portfolio && displayProvider.portfolio.length > 0 ? (
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>Portfolio</Text>
@@ -157,6 +212,29 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     marginBottom: 12,
     color: '#0f172a',
+  },
+  emptyReviews: {
+    color: '#6b7280',
+  },
+  reviewCard: {
+    backgroundColor: '#ffffff',
+    borderRadius: 12,
+    padding: 12,
+    marginBottom: 12,
+    shadowColor: '#0f172a',
+    shadowOpacity: 0.05,
+    shadowOffset: { width: 0, height: 1 },
+    shadowRadius: 3,
+    elevation: 1,
+  },
+  reviewComment: {
+    marginTop: 8,
+    color: '#374151',
+  },
+  reviewDate: {
+    marginTop: 8,
+    fontSize: 12,
+    color: '#6b7280',
   },
   portfolioList: {
     gap: 12,

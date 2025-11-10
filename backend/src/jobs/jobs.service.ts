@@ -57,22 +57,24 @@ export class JobsService {
     };
 
     this.jobs.unshift(job);
-    return this.toResponse(job);
+    return await this.toResponse(job);
   }
 
-  listJobsForUser(user: { id: string; role: UserRole }): JobResponseDto[] {
+  async listJobsForUser(user: { id: string; role: UserRole }): Promise<JobResponseDto[]> {
     if (user.role === UserRole.CUSTOMER) {
-      return this.jobs.filter((job) => job.customerId === user.id).map((job) => this.toResponse(job));
+      const jobsForCustomer = this.jobs.filter((job) => job.customerId === user.id);
+      return Promise.all(jobsForCustomer.map((job) => this.toResponse(job)));
     }
 
     if (user.role === UserRole.PROVIDER) {
-      return this.jobs.filter((job) => job.providerUserId === user.id).map((job) => this.toResponse(job));
+      const jobsForProvider = this.jobs.filter((job) => job.providerUserId === user.id);
+      return Promise.all(jobsForProvider.map((job) => this.toResponse(job)));
     }
 
     return [];
   }
 
-  updateJobStatus(jobId: string, providerUserId: string, dto: UpdateJobStatusDto): JobResponseDto {
+  async updateJobStatus(jobId: string, providerUserId: string, dto: UpdateJobStatusDto): Promise<JobResponseDto> {
     const job = this.jobs.find((item) => item.id === jobId);
 
     if (!job) {
@@ -109,7 +111,11 @@ export class JobsService {
       }
     }
 
-    return this.toResponse(job);
+    return await this.toResponse(job);
+  }
+
+  getJobById(jobId: string) {
+    return this.jobs.find((job) => job.id === jobId);
   }
 
   private getDefaultScheduledAt(now: Date) {
@@ -119,9 +125,12 @@ export class JobsService {
     return scheduled;
   }
 
-  private toResponse(job: JobRecord): JobResponseDto {
+  private async toResponse(job: JobRecord): Promise<JobResponseDto> {
+    const review = await this.prisma.review.findUnique({ where: { jobId: job.id } });
+
     return {
       id: job.id,
+      providerId: job.providerProfileId,
       title: job.title,
       providerName: job.providerName,
       status: job.status,
@@ -131,6 +140,7 @@ export class JobsService {
       notes: job.notes,
       createdAt: job.createdAt,
       updatedAt: job.updatedAt,
+      hasReview: Boolean(review),
     };
   }
 }

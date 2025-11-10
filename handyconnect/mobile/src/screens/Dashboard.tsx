@@ -1,4 +1,4 @@
-import React, { useCallback, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   View,
   Text,
@@ -12,11 +12,14 @@ import { useFocusEffect, useNavigation, useRoute, RouteProp } from '@react-navig
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { RootStackParamList } from '../navigation/RootNavigator';
 import { api } from '../api/client';
+import RateProviderModal from '../components/RateProviderModal';
+import { useProvidersStore } from '../store/providers';
 
 type JobStatus = 'PENDING' | 'ACCEPTED' | 'IN_PROGRESS' | 'COMPLETED';
 
 interface Job {
   id: string;
+  providerId: string;
   title: string;
   providerName: string;
   status: JobStatus;
@@ -24,6 +27,7 @@ interface Job {
   suburb: string;
   priceCents: number;
   notes: string | null;
+  hasReview: boolean;
 }
 
 type NavigationProp = NativeStackNavigationProp<RootStackParamList, 'Dashboard'>;
@@ -37,6 +41,10 @@ const Dashboard: React.FC = () => {
   const [loading, setLoading] = useState<boolean>(false);
   const [refreshing, setRefreshing] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
+  const [selectedJob, setSelectedJob] = useState<Job | null>(null);
+  const [submittingReview, setSubmittingReview] = useState<boolean>(false);
+  const [dismissedJobIds, setDismissedJobIds] = useState<string[]>([]);
+  const updateProvider = useProvidersStore((state) => state.updateProvider);
 
   const fetchJobs = useCallback(async () => {
     setLoading(true);
@@ -67,6 +75,78 @@ const Dashboard: React.FC = () => {
     useCallback(() => {
       fetchJobs();
     }, [fetchJobs]),
+  );
+
+  useEffect(() => {
+    if (!jobs.length) {
+      setSelectedJob(null);
+      return;
+    }
+
+    const dismissedSet = new Set(dismissedJobIds);
+    const pendingReview = jobs.find(
+      (job) => job.status === 'COMPLETED' && !job.hasReview && !dismissedSet.has(job.id),
+    );
+
+    if (!pendingReview) {
+      setSelectedJob(null);
+      return;
+    }
+
+    if (!selectedJob || selectedJob.id !== pendingReview.id) {
+      setSelectedJob(pendingReview);
+    }
+  }, [jobs, dismissedJobIds, selectedJob]);
+
+  const handleDismissReview = useCallback(() => {
+    if (selectedJob) {
+      setDismissedJobIds((prev) => (prev.includes(selectedJob.id) ? prev : [...prev, selectedJob.id]));
+    }
+    setSelectedJob(null);
+  }, [selectedJob]);
+
+  const handleSubmitReview = useCallback(
+    async ({ rating, comment }: { rating: number; comment: string }) => {
+      if (!selectedJob) {
+        return;
+      }
+
+      try {
+        setSubmittingReview(true);
+        setError(null);
+        const response = await api.post<{
+          providerRating: { providerId: string; rating: number | null; ratingCount: number };
+        }>('/reviews', {
+          jobId: selectedJob.id,
+          rating,
+          comment,
+        });
+
+        const providerRating = response.data.providerRating;
+        setJobs((prev) =>
+          prev.map((job) =>
+            job.id === selectedJob.id
+              ? {
+                  ...job,
+                  hasReview: true,
+                }
+              : job,
+          ),
+        );
+        updateProvider({
+          id: providerRating.providerId,
+          rating: providerRating.rating ?? null,
+          ratingCount: providerRating.ratingCount,
+        });
+        setDismissedJobIds((prev) => (prev.includes(selectedJob.id) ? prev : [...prev, selectedJob.id]));
+        setSelectedJob(null);
+      } catch (err) {
+        setError('Unable to submit review right now.');
+      } finally {
+        setSubmittingReview(false);
+      }
+    },
+    [selectedJob, updateProvider],
   );
 
   const activeJobs = useMemo(() => {
@@ -100,6 +180,13 @@ const Dashboard: React.FC = () => {
       <Pressable onPress={() => navigation.navigate('Home')} style={({ pressed }) => [styles.button, pressed && styles.buttonPressed]}>
         <Text style={styles.buttonText}>Book another provider</Text>
       </Pressable>
+      <RateProviderModal
+        visible={Boolean(selectedJob)}
+        providerName={selectedJob?.providerName ?? ''}
+        onClose={handleDismissReview}
+        onSubmit={handleSubmitReview}
+        submitting={submittingReview}
+      />
     </View>
   );
 };

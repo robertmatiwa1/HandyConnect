@@ -6,8 +6,10 @@ import { RootStackParamList } from '../navigation/RootNavigator';
 import { api } from '../api/client';
 
 interface BookingResponse {
-  id: string;
-  status: string;
+  job: {
+    id: string;
+    status: string;
+  };
 }
 
 type NavigationProp = NativeStackNavigationProp<RootStackParamList, 'Booking'>;
@@ -35,7 +37,7 @@ const BookingScreen: React.FC = () => {
       navigation.reset({
         index: 0,
         routes: [
-          { name: 'Dashboard', params: { bookingId: response.data.id } as RootStackParamList['Dashboard'] }
+          { name: 'Dashboard', params: { bookingId: response.data.job.id } as RootStackParamList['Dashboard'] }
         ]
       });
     } catch (error) {

@@ -1,25 +1,16 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import { PaymentStatus } from '@prisma/client';
 
-export enum PaymentStatus {
-  PENDING = 'PENDING',
-  ESCROW = 'ESCROW',
-  PAID = 'PAID',
-}
+import { PrismaService } from '../prisma/prisma.service';
+import { JobStatus } from '../jobs/job-status.enum';
 
-export interface Payment {
-  jobId: string;
-  amountCents: number;
-  commissionCents: number;
-  providerPayoutCents: number;
-  status: PaymentStatus;
-  checkoutUrl: string;
-}
+const PSP_BASE_URL = process.env.PSP_BASE_URL ?? 'https://checkout.handypayments.dev/session';
 
 @Injectable()
 export class PaymentsService {
-  private payments: Map<string, Payment> = new Map();
+  constructor(private readonly prisma: PrismaService) {}
 
-  createCheckout(jobId: string, amountCents: number) {
+  async createCheckout(jobId: string, amountCents: number) {
     if (!jobId) {
       throw new BadRequestException('jobId is required for checkout creation.');
     }
@@ -28,25 +19,46 @@ export class PaymentsService {
       throw new BadRequestException('amountCents must be a positive number.');
     }
 
+    const job = await this.prisma.job.findUnique({
+      where: { id: jobId },
+      include: { payment: true },
+    });
+
+    if (!job) {
+      throw new NotFoundException(`Job ${jobId} not found`);
+    }
+
+    if (job.status === JobStatus.CANCELLED) {
+      throw new BadRequestException('Cannot create a checkout for a cancelled job.');
+    }
+
     const commissionCents = Math.round(amountCents * 0.1);
     const providerPayoutCents = Math.max(amountCents - commissionCents, 0);
-    const checkoutUrl = `https://sandbox.payfast.co.za/fake?id=${jobId}`;
+    const checkoutUrl = `${PSP_BASE_URL}?job=${jobId}`;
 
-    const payment: Payment = {
-      jobId,
-      amountCents,
-      commissionCents,
-      providerPayoutCents,
-      status: PaymentStatus.PENDING,
-      checkoutUrl,
-    };
+    const payment = await this.prisma.payment.upsert({
+      where: { jobId },
+      update: {
+        amountCents,
+        commissionCents,
+        providerPayoutCents,
+        checkoutUrl,
+        status: PaymentStatus.PENDING,
+      },
+      create: {
+        jobId,
+        amountCents,
+        commissionCents,
+        providerPayoutCents,
+        checkoutUrl,
+        status: PaymentStatus.PENDING,
+      },
+    });
 
-    this.payments.set(jobId, payment);
-
-    return { checkoutUrl };
+    return { checkoutUrl: payment.checkoutUrl, payment };
   }
 
-  handleWebhook(jobId: string, status: PaymentStatus): Payment {
+  async handleWebhook(jobId: string, status: PaymentStatus) {
     switch (status) {
       case PaymentStatus.ESCROW:
         return this.moveToEscrow(jobId);
@@ -59,36 +71,52 @@ export class PaymentsService {
     }
   }
 
-  moveToEscrow(jobId: string): Payment {
-    const payment = this.getPaymentOrThrow(jobId);
+  async moveToEscrow(jobId: string) {
+    const payment = await this.getPaymentOrThrow(jobId);
 
     if (payment.status !== PaymentStatus.PENDING) {
       throw new BadRequestException(`Payment for job ${jobId} cannot move to escrow from ${payment.status}`);
     }
 
-    payment.status = PaymentStatus.ESCROW;
-    this.payments.set(jobId, payment);
-    return payment;
+    const updated = await this.prisma.payment.update({
+      where: { jobId },
+      data: { status: PaymentStatus.ESCROW },
+    });
+
+    await this.prisma.job.update({
+      where: { id: jobId },
+      data: { status: JobStatus.IN_PROGRESS },
+    });
+
+    return updated;
   }
 
-  releaseEscrow(jobId: string): Payment {
-    const payment = this.getPaymentOrThrow(jobId);
+  async releaseEscrow(jobId: string) {
+    const payment = await this.getPaymentOrThrow(jobId);
 
     if (payment.status !== PaymentStatus.ESCROW) {
       throw new BadRequestException(`Payment for job ${jobId} is not ready for release.`);
     }
 
-    payment.status = PaymentStatus.PAID;
-    this.payments.set(jobId, payment);
-    return payment;
+    const updated = await this.prisma.payment.update({
+      where: { jobId },
+      data: { status: PaymentStatus.PAID },
+    });
+
+    await this.prisma.job.update({
+      where: { id: jobId },
+      data: { status: JobStatus.COMPLETED },
+    });
+
+    return updated;
   }
 
-  getPayment(jobId: string): Payment | undefined {
-    return this.payments.get(jobId);
+  async getPayment(jobId: string) {
+    return this.prisma.payment.findUnique({ where: { jobId } });
   }
 
-  private getPaymentOrThrow(jobId: string): Payment {
-    const payment = this.payments.get(jobId);
+  private async getPaymentOrThrow(jobId: string) {
+    const payment = await this.prisma.payment.findUnique({ where: { jobId } });
     if (!payment) {
       throw new NotFoundException(`Payment for job ${jobId} not found`);
     }

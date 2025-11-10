@@ -1,8 +1,8 @@
-﻿import { NextResponse } from "next/server";
+import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
 
 const PROTECTED_ROUTES = ["/disputes", "/refunds", "/provider-verification"];
-const SESSION_COOKIE = "handyconnect_auth";
+const SESSION_COOKIE = "handyconnect_auth_token";
 
 export function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl;
@@ -13,7 +13,7 @@ export function middleware(request: NextRequest) {
 
   const session = request.cookies.get(SESSION_COOKIE)?.value;
 
-  if (session === "authenticated") {
+  if (session) {
     return NextResponse.next();
   }
 

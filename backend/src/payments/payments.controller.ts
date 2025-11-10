@@ -1,10 +1,12 @@
 import { BadRequestException, Body, Controller, Post, UseGuards } from '@nestjs/common';
 
+import { PaymentStatus } from '@prisma/client';
+
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { Roles } from '../common/decorators/roles.decorator';
 import { RolesGuard } from '../common/guards/roles.guard';
 import { UserRole } from '../users/user-role.enum';
-import { PaymentStatus, PaymentsService } from './payments.service';
+import { PaymentsService } from './payments.service';
 
 @Controller('payments')
 export class PaymentsController {

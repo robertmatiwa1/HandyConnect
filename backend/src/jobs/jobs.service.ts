@@ -1,19 +1,21 @@
 import { BadRequestException, Injectable, NotFoundException, UnauthorizedException } from '@nestjs/common';
+import { PaymentStatus, Prisma } from '@prisma/client';
 
 import { PrismaService } from '../prisma/prisma.service';
-import { PaymentStatus, PaymentsService } from '../payments/payments.service';
+import { PaymentsService } from '../payments/payments.service';
 import { sendNotification } from '../notifications/notification.service';
 import { UserRole } from '../users/user-role.enum';
 import { JobStatus } from './job-status.enum';
 import { CreateJobDto } from './dto/create-job.dto';
 import { JobResponseDto } from './dto/job-response.dto';
 import { UpdateJobStatusDto } from './dto/update-job-status.dto';
-import { JobRecord } from './job.interface';
+
+type JobWithRelations = Prisma.JobGetPayload<{
+  include: { provider: { include: { user: true } }; review: true };
+}>;
 
 @Injectable()
 export class JobsService {
-  private readonly jobs: JobRecord[] = [];
-
   constructor(
     private readonly prisma: PrismaService,
     private readonly paymentsService: PaymentsService,
@@ -41,23 +43,19 @@ export class JobsService {
 
     const notes = dto.notes?.trim();
 
-    const job: JobRecord = {
-      id: `job_${Math.random().toString(36).substring(2, 10)}`,
-      customerId,
-      providerProfileId: providerProfile.id,
-      providerUserId: providerProfile.userId,
-      providerName: providerProfile.user.name,
-      title: `${providerProfile.skill} service`,
-      notes: notes ? notes : null,
-      scheduledAt: scheduledAt.toISOString(),
-      suburb: providerProfile.suburb,
-      priceCents: providerProfile.hourlyRate ?? 7500,
-      status: JobStatus.PENDING,
-      createdAt: now.toISOString(),
-      updatedAt: now.toISOString(),
-    };
-
-    this.jobs.unshift(job);
+    const job = await this.prisma.job.create({
+      data: {
+        customerId,
+        providerProfileId: providerProfile.id,
+        title: `${providerProfile.skill} service`,
+        notes: notes ?? null,
+        scheduledAt,
+        suburb: providerProfile.suburb,
+        priceCents: providerProfile.hourlyRate ?? 7500,
+        status: JobStatus.PENDING,
+      },
+      include: this.defaultInclude,
+    });
 
     sendNotification(
       providerProfile.userId,
@@ -70,69 +68,81 @@ export class JobsService {
 
   async listJobsForUser(user: { id: string; role: UserRole }): Promise<JobResponseDto[]> {
     if (user.role === UserRole.CUSTOMER) {
-      const jobsForCustomer = this.jobs.filter((job) => job.customerId === user.id);
-      return Promise.all(jobsForCustomer.map((job) => this.toResponse(job)));
+      const jobs = await this.prisma.job.findMany({
+        where: { customerId: user.id },
+        include: this.defaultInclude,
+        orderBy: { createdAt: 'desc' },
+      });
+      return Promise.all(jobs.map((job) => this.toResponse(job)));
     }
 
     if (user.role === UserRole.PROVIDER) {
-      const jobsForProvider = this.jobs.filter((job) => job.providerUserId === user.id);
-      return Promise.all(jobsForProvider.map((job) => this.toResponse(job)));
+      const jobs = await this.prisma.job.findMany({
+        where: { provider: { userId: user.id } },
+        include: this.defaultInclude,
+        orderBy: { createdAt: 'desc' },
+      });
+      return Promise.all(jobs.map((job) => this.toResponse(job)));
     }
 
     return [];
   }
 
   async updateJobStatus(jobId: string, providerUserId: string, dto: UpdateJobStatusDto): Promise<JobResponseDto> {
-    const job = this.jobs.find((item) => item.id === jobId);
+    const job = await this.prisma.job.findFirst({
+      where: { id: jobId, provider: { userId: providerUserId } },
+      include: this.defaultInclude,
+    });
 
     if (!job) {
       throw new NotFoundException('Job not found');
-    }
-
-    if (job.providerUserId !== providerUserId) {
-      throw new UnauthorizedException('You are not assigned to this job');
     }
 
     if (!Object.values(JobStatus).includes(dto.status)) {
       throw new BadRequestException('Invalid status');
     }
 
-    job.status = dto.status;
-    job.updatedAt = new Date().toISOString();
+    const updated = await this.prisma.job.update({
+      where: { id: jobId },
+      data: { status: dto.status },
+      include: this.defaultInclude,
+    });
 
     if (dto.status === JobStatus.ACCEPTED) {
       sendNotification(
-        job.customerId,
+        updated.customerId,
         'JOB_ACCEPTED',
-        `Job ${job.id} has been accepted by ${job.providerName}.`,
+        `Job ${updated.id} has been accepted by ${updated.provider.user.name}.`,
       );
     }
 
     if (dto.status === JobStatus.COMPLETED) {
-      console.log(`[Push] Job ${job.id} completed for customer ${job.customerId}`);
+      console.log(`[Push] Job ${updated.id} completed for customer ${updated.customerId}`);
 
-      const payment = this.paymentsService.getPayment(job.id);
+      const payment = await this.paymentsService.getPayment(updated.id);
 
       if (payment && payment.status === PaymentStatus.ESCROW) {
         try {
-          this.paymentsService.releaseEscrow(job.id);
-          console.log(`[Payments] Escrow released for job ${job.id}`);
+          await this.paymentsService.releaseEscrow(updated.id);
+          console.log(`[Payments] Escrow released for job ${updated.id}`);
           sendNotification(
-            job.providerUserId,
+            updated.provider.userId,
             'PAYOUT_RELEASED',
-            `Payout released for job ${job.id}.`,
+            `Payout released for job ${updated.id}.`,
           );
         } catch (error) {
-          console.warn(`[Payments] Unable to release escrow for job ${job.id}: ${(error as Error).message}`);
+          console.warn(
+            `[Payments] Unable to release escrow for job ${updated.id}: ${(error as Error).message}`,
+          );
         }
       }
     }
 
-    return await this.toResponse(job);
+    return await this.toResponse(updated);
   }
 
-  getJobById(jobId: string) {
-    return this.jobs.find((job) => job.id === jobId);
+  async getJobById(jobId: string) {
+    return this.prisma.job.findUnique({ where: { id: jobId }, include: this.defaultInclude });
   }
 
   private getDefaultScheduledAt(now: Date) {
@@ -142,22 +152,25 @@ export class JobsService {
     return scheduled;
   }
 
-  private async toResponse(job: JobRecord): Promise<JobResponseDto> {
-    const review = await this.prisma.review.findUnique({ where: { jobId: job.id } });
+  private readonly defaultInclude: Prisma.JobInclude = {
+    provider: { include: { user: true } },
+    review: true,
+  };
 
+  private async toResponse(job: JobWithRelations): Promise<JobResponseDto> {
     return {
       id: job.id,
       providerId: job.providerProfileId,
       title: job.title,
-      providerName: job.providerName,
+      providerName: job.provider.user.name,
       status: job.status,
-      scheduledAt: job.scheduledAt,
+      scheduledAt: job.scheduledAt.toISOString(),
       suburb: job.suburb,
       priceCents: job.priceCents,
-      notes: job.notes,
-      createdAt: job.createdAt,
-      updatedAt: job.updatedAt,
-      hasReview: Boolean(review),
+      notes: job.notes ?? null,
+      createdAt: job.createdAt.toISOString(),
+      updatedAt: job.updatedAt.toISOString(),
+      hasReview: Boolean(job.review),
     };
   }
 }

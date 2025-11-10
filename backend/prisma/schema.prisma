@@ -1,0 +1,69 @@
+generator client { provider = "prisma-client-js" }
+datasource db { provider = "postgresql"; url = env("DATABASE_URL") }
+
+model User {
+  id             String           @id @default(cuid())
+  name           String
+  email          String           @unique
+  phone          String?
+  password       String
+  role           Role             @default(CUSTOMER)
+  verified       Boolean          @default(false)
+  createdAt      DateTime         @default(now())
+  provider       ProviderProfile?
+  jobsAsCustomer Job[]            @relation("JobsAsCustomer")
+  jobsAsProvider Job[]            @relation("JobsAsProvider")
+}
+
+model ProviderProfile {
+  id              String   @id @default(cuid())
+  userId          String   @unique
+  user            User     @relation(fields: [userId], references: [id])
+  skillCategory   String
+  hourlyRate      Int
+  suburb          String
+  certifications  String[]
+  portfolioUrls   String[]
+  rating          Float    @default(0)
+  ratingsCount    Int      @default(0)
+}
+
+model Job {
+  id          String      @id @default(cuid())
+  customerId  String
+  providerId  String?
+  customer    User        @relation("JobsAsCustomer", fields: [customerId], references: [id])
+  provider    User?       @relation("JobsAsProvider", fields: [providerId], references: [id])
+  status      JobStatus   @default(REQUESTED)
+  description String
+  suburb      String
+  scheduledAt DateTime
+  priceCents  Int
+  createdAt   DateTime    @default(now())
+  payment     Payment?
+  review      Review?
+}
+
+model Payment {
+  id                  String         @id @default(cuid())
+  jobId               String         @unique
+  job                 Job            @relation(fields: [jobId], references: [id])
+  amountCents         Int
+  status              PaymentStatus  @default(PENDING)
+  method              String
+  commissionCents     Int
+  providerPayoutCents Int
+}
+
+model Review {
+  id        String   @id @default(cuid())
+  jobId     String   @unique
+  job       Job      @relation(fields: [jobId], references: [id])
+  rating    Int
+  comment   String?
+  createdAt DateTime @default(now())
+}
+
+enum Role { CUSTOMER PROVIDER ADMIN }
+enum JobStatus { REQUESTED ACCEPTED IN_PROGRESS COMPLETED CANCELLED }
+enum PaymentStatus { PENDING ESCROW PAID REFUNDED }

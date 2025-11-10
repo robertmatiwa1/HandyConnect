@@ -5,6 +5,7 @@ import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import ProviderCard, { Provider } from '../components/ProviderCard';
 import { RootStackParamList } from '../navigation/RootNavigator';
 import { api } from '../api/client';
+import { useProvidersStore } from '../store/providers';
 
 type NavigationProp = NativeStackNavigationProp<RootStackParamList, 'Search'>;
 type SearchRouteProp = RouteProp<RootStackParamList, 'Search'>;
@@ -17,6 +18,7 @@ const SearchScreen: React.FC = () => {
   const [providers, setProviders] = useState<Provider[]>([]);
   const [loading, setLoading] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
+  const upsertProviders = useProvidersStore((state) => state.upsertMany);
 
   const fetchProviders = useCallback(async () => {
     try {
@@ -26,12 +28,13 @@ const SearchScreen: React.FC = () => {
         params: { skill, suburb }
       });
       setProviders(response.data);
+      upsertProviders(response.data);
     } catch (err) {
       setError('Unable to load providers. Please try again.');
     } finally {
       setLoading(false);
     }
-  }, [skill, suburb]);
+  }, [skill, suburb, upsertProviders]);
 
   useEffect(() => {
     fetchProviders();

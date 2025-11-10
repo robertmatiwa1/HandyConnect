@@ -12,6 +12,14 @@ enum Role {
   PROVIDER
 }
 
+enum JobStatus {
+  PENDING
+  ACCEPTED
+  IN_PROGRESS
+  COMPLETED
+  CANCELLED
+}
+
 model User {
   id                    String           @id @default(uuid())
   email                 String           @unique
@@ -22,6 +30,8 @@ model User {
   createdAt             DateTime         @default(now())
   updatedAt             DateTime         @updatedAt
   providerProfile       ProviderProfile?
+  customerJobs          Job[]            @relation("CustomerJobs")
+  customerReviews       Review[]         @relation("CustomerReviews")
 }
 
 model ProviderProfile {
@@ -39,6 +49,25 @@ model ProviderProfile {
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
   reviews         Review[]
+  jobs            Job[]
+}
+
+model Job {
+  id                String    @id @default(uuid())
+  customerId        String
+  providerProfileId String
+  title             String
+  notes             String?
+  scheduledAt       DateTime
+  suburb            String
+  priceCents        Int
+  status            JobStatus @default(PENDING)
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+
+  customer User            @relation("CustomerJobs", fields: [customerId], references: [id])
+  provider ProviderProfile @relation(fields: [providerProfileId], references: [id])
+  review   Review?
 }
 
 model Review {
@@ -47,6 +76,8 @@ model Review {
   providerId String
   provider   ProviderProfile @relation(fields: [providerId], references: [id], onDelete: Cascade)
   customerId String
+  customer   User            @relation("CustomerReviews", fields: [customerId], references: [id])
+  job        Job             @relation(fields: [jobId], references: [id], onDelete: Cascade)
   rating     Int
   comment    String?
   createdAt  DateTime        @default(now())

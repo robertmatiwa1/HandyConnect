@@ -1,22 +1,40 @@
-import { Body, Controller, Post, UseGuards } from '@nestjs/common';
+import { Body, Controller, Param, Patch, Post, Req, UseGuards } from '@nestjs/common';
+import { Request } from 'express';
 
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { Roles } from '../common/decorators/roles.decorator';
 import { RolesGuard } from '../common/guards/roles.guard';
 import { UserRole } from '../users/user-role.enum';
+import { CreateJobDto } from './dto/create-job.dto';
+import { UpdateJobStatusDto } from './dto/update-job-status.dto';
+import { JobsService } from './jobs.service';
+
+type RequestWithUser = Request & { user: { id: string } };
 
 @Controller('jobs')
 @UseGuards(JwtAuthGuard, RolesGuard)
 export class JobsController {
+  constructor(private readonly jobsService: JobsService) {}
+
   @Post()
   @Roles(UserRole.CUSTOMER)
-  createJob(@Body() body: { title: string; description: string }) {
+  async createJob(@Req() req: RequestWithUser, @Body() dto: CreateJobDto) {
+    const job = await this.jobsService.createJob(req.user.id, dto);
+
     return {
       message: 'Job created',
-      job: {
-        id: 'job_' + Math.random().toString(36).substring(2, 10),
-        ...body,
-      },
+      job,
+    };
+  }
+
+  @Patch(':id/status')
+  @Roles(UserRole.PROVIDER)
+  updateStatus(@Req() req: RequestWithUser, @Param('id') id: string, @Body() dto: UpdateJobStatusDto) {
+    const job = this.jobsService.updateJobStatus(id, req.user.id, dto);
+
+    return {
+      message: `Job status updated to ${job.status}`,
+      job,
     };
   }
 }

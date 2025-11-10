@@ -8,6 +8,15 @@ async function bootstrap() {
   const app = await NestFactory.create(AppModule);
   app.useGlobalPipes(new ValidationPipe({ whitelist: true }));
 
+  const corsOrigins = process.env.EXPO_DEV_HOST
+    ? process.env.EXPO_DEV_HOST.split(',').map((origin) => origin.trim()).filter(Boolean)
+    : [];
+
+  app.enableCors({
+    origin: corsOrigins.length > 0 ? corsOrigins : true,
+    credentials: true,
+  });
+
   const config = new DocumentBuilder()
     .setTitle('HandyConnect API')
     .setDescription('API documentation for HandyConnect')

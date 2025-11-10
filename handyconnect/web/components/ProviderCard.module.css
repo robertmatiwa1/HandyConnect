@@ -1,0 +1,45 @@
+.card {
+  display: block;
+  background: #ffffff;
+  border-radius: 14px;
+  padding: 20px;
+  border: 1px solid #e5e7eb;
+  box-shadow: 0 15px 35px rgba(15, 23, 42, 0.05);
+  transition: transform 0.2s ease, box-shadow 0.2s ease;
+}
+
+.card:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 20px 45px rgba(15, 23, 42, 0.1);
+}
+
+.header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 12px;
+}
+
+.name {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 600;
+  color: #111827;
+}
+
+.meta {
+  margin: 4px 0 12px;
+  color: #4b5563;
+}
+
+.rate {
+  margin: 0 0 10px;
+  color: #1f2937;
+  font-weight: 600;
+}
+
+.bio {
+  margin: 0;
+  color: #6b7280;
+  line-height: 1.5;
+}

@@ -47,3 +47,7 @@ Thumbs.db
 # Temporary files
 *.tmp
 *.cache
+
+# Next.js build artifacts
+.next/
+.turbo/

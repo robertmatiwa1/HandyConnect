@@ -9,7 +9,12 @@ interface BookingResponse {
   job: {
     id: string;
     status: string;
+    priceCents?: number;
   };
+}
+
+interface CheckoutResponse {
+  checkoutUrl: string;
 }
 
 type NavigationProp = NativeStackNavigationProp<RootStackParamList, 'Booking'>;
@@ -34,13 +39,21 @@ const BookingScreen: React.FC = () => {
         scheduledAt,
         notes
       });
-      navigation.reset({
-        index: 0,
-        routes: [
-          { name: 'Dashboard', params: { bookingId: response.data.job.id } as RootStackParamList['Dashboard'] }
-        ]
+      const jobId = response.data.job.id;
+      const hourlyRate = typeof provider.hourlyRate === 'number' ? provider.hourlyRate : 750;
+      const amountCents = response.data.job.priceCents ?? Math.round(hourlyRate * 100);
+
+      const checkout = await api.post<CheckoutResponse>('/payments/checkout', {
+        jobId,
+        amountCents
+      });
+
+      navigation.navigate('Payment', {
+        jobId,
+        checkoutUrl: checkout.data.checkoutUrl
       });
     } catch (error) {
+      console.error('Booking failed', error);
       Alert.alert('Booking failed', 'Please try again later.');
     } finally {
       setSubmitting(false);

@@ -5,6 +5,7 @@ import SearchScreen from '../screens/SearchScreen';
 import ProviderProfile from '../screens/ProviderProfile';
 import BookingScreen from '../screens/BookingScreen';
 import Dashboard from '../screens/Dashboard';
+import PaymentScreen from '../screens/PaymentScreen';
 import { Provider } from '../components/ProviderCard';
 
 export type RootStackParamList = {
@@ -13,6 +14,7 @@ export type RootStackParamList = {
   ProviderProfile: { provider: Provider };
   Booking: { provider: Provider };
   Dashboard: { bookingId: string } | undefined;
+  Payment: { jobId: string; checkoutUrl: string };
 };
 
 const Stack = createNativeStackNavigator<RootStackParamList>();
@@ -25,6 +27,7 @@ const RootNavigator = () => {
       <Stack.Screen name="ProviderProfile" component={ProviderProfile} options={{ title: 'Provider' }} />
       <Stack.Screen name="Booking" component={BookingScreen} options={{ title: 'Book Provider' }} />
       <Stack.Screen name="Dashboard" component={Dashboard} options={{ title: 'Dashboard' }} />
+      <Stack.Screen name="Payment" component={PaymentScreen} options={{ title: 'Secure payment' }} />
     </Stack.Navigator>
   );
 };

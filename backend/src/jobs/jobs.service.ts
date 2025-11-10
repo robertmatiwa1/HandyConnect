@@ -1,6 +1,7 @@
 import { BadRequestException, Injectable, NotFoundException, UnauthorizedException } from '@nestjs/common';
 
 import { PrismaService } from '../prisma/prisma.service';
+import { PaymentStatus, PaymentsService } from '../payments/payments.service';
 import { UserRole } from '../users/user-role.enum';
 import { JobStatus } from './job-status.enum';
 import { CreateJobDto } from './dto/create-job.dto';
@@ -12,7 +13,10 @@ import { JobRecord } from './job.interface';
 export class JobsService {
   private readonly jobs: JobRecord[] = [];
 
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly paymentsService: PaymentsService,
+  ) {}
 
   async createJob(customerId: string, dto: CreateJobDto): Promise<JobResponseDto> {
     if (!dto.providerId) {
@@ -92,6 +96,17 @@ export class JobsService {
 
     if (dto.status === JobStatus.COMPLETED) {
       console.log(`[Push] Job ${job.id} completed for customer ${job.customerId}`);
+
+      const payment = this.paymentsService.getPayment(job.id);
+
+      if (payment && payment.status === PaymentStatus.ESCROW) {
+        try {
+          this.paymentsService.releaseEscrow(job.id);
+          console.log(`[Payments] Escrow released for job ${job.id}`);
+        } catch (error) {
+          console.warn(`[Payments] Unable to release escrow for job ${job.id}: ${(error as Error).message}`);
+        }
+      }
     }
 
     return this.toResponse(job);

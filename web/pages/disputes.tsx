@@ -1,38 +1,32 @@
-﻿import type { GetServerSideProps } from "next";
+import type { GetServerSideProps } from "next";
+
 import { Layout } from "../components/Layout";
-import { isAuthenticatedFromCookies } from "../lib/auth";
+import { fetchFromBackend } from "../lib/backend";
+import { getAuthTokenFromCookies, isAuthenticatedFromCookies } from "../lib/auth";
+import { formatCurrency } from "../lib/format";
+import { OpsDispute } from "../lib/types";
 
 interface DisputesProps {
   isAuthenticated: boolean;
+  disputes: OpsDispute[];
 }
 
-const disputes = [
-  {
-    id: "DSP-2042",
-    customer: "Jamie Lee",
-    amount: "$180.00",
-    status: "Awaiting merchant evidence",
-    submittedAt: "2023-10-01"
-  },
-  {
-    id: "DSP-2043",
-    customer: "Alex Morgan",
-    amount: "$95.00",
-    status: "Chargeback filed",
-    submittedAt: "2023-09-28"
-  }
-];
+const statusCopy: Record<string, string> = {
+  OPEN: "Open",
+  AWAITING_MERCHANT_EVIDENCE: "Awaiting merchant evidence",
+  CHARGEBACK_FILED: "Chargeback filed",
+  WON: "Won",
+  LOST: "Lost"
+};
 
-export default function Disputes({ isAuthenticated }: DisputesProps) {
+export default function Disputes({ isAuthenticated, disputes }: DisputesProps) {
   return (
     <Layout isAuthenticated={isAuthenticated}>
       <section>
-        <h1 style={{ fontSize: "2.25rem", marginBottom: "1rem" }}>
-          Dispute Resolution
-        </h1>
+        <h1 style={{ fontSize: "2.25rem", marginBottom: "1rem" }}>Dispute Resolution</h1>
         <p style={{ color: "#475569", maxWidth: "620px" }}>
-          Review open customer disputes, gather supporting documentation, and
-          coordinate with payment processors to minimize financial exposure.
+          Review open customer disputes, gather supporting documentation, and coordinate with payment processors to
+          minimize financial exposure.
         </p>
         <div
           style={{
@@ -47,6 +41,7 @@ export default function Disputes({ isAuthenticated }: DisputesProps) {
               <tr style={{ textAlign: "left", color: "#64748b" }}>
                 <th style={{ paddingBottom: "0.75rem" }}>Case</th>
                 <th>Customer</th>
+                <th>Provider</th>
                 <th>Amount</th>
                 <th>Status</th>
                 <th>Submitted</th>
@@ -56,12 +51,20 @@ export default function Disputes({ isAuthenticated }: DisputesProps) {
               {disputes.map((dispute) => (
                 <tr key={dispute.id} style={{ borderTop: "1px solid #e2e8f0" }}>
                   <td style={{ padding: "0.75rem 0" }}>{dispute.id}</td>
-                  <td>{dispute.customer}</td>
-                  <td>{dispute.amount}</td>
-                  <td>{dispute.status}</td>
-                  <td>{dispute.submittedAt}</td>
+                  <td>{dispute.customerName}</td>
+                  <td>{dispute.providerName}</td>
+                  <td>{formatCurrency(dispute.amountCents / 100)}</td>
+                  <td>{statusCopy[dispute.status] ?? dispute.status}</td>
+                  <td>{new Date(dispute.submittedAt).toLocaleDateString()}</td>
                 </tr>
               ))}
+              {disputes.length === 0 && (
+                <tr>
+                  <td colSpan={6} style={{ padding: "1.5rem", textAlign: "center", color: "#64748b" }}>
+                    No disputes have been logged.
+                  </td>
+                </tr>
+              )}
             </tbody>
           </table>
         </div>
@@ -70,12 +73,12 @@ export default function Disputes({ isAuthenticated }: DisputesProps) {
   );
 }
 
-export const getServerSideProps: GetServerSideProps<DisputesProps> = async ({
-  req
-}) => {
-  const isAuthenticated = isAuthenticatedFromCookies(req.cookies);
+export const getServerSideProps: GetServerSideProps<DisputesProps> = async ({ req }) => {
+  const cookies = req.cookies;
+  const token = getAuthTokenFromCookies(cookies);
+  const isAuthenticated = isAuthenticatedFromCookies(cookies);
 
-  if (!isAuthenticated) {
+  if (!token || !isAuthenticated) {
     return {
       redirect: {
         destination: "/login",
@@ -84,9 +87,31 @@ export const getServerSideProps: GetServerSideProps<DisputesProps> = async ({
     };
   }
 
-  return {
-    props: {
-      isAuthenticated
+  try {
+    const data = await fetchFromBackend<{ disputes: OpsDispute[] }>("/ops/disputes", token);
+
+    return {
+      props: {
+        isAuthenticated: true,
+        disputes: data.disputes
+      }
+    };
+  } catch (error) {
+    console.error("Failed to load disputes", error);
+    if (error instanceof Error && error.message.includes("status 401")) {
+      return {
+        redirect: {
+          destination: "/login",
+          permanent: false
+        }
+      };
     }
-  };
+
+    return {
+      props: {
+        isAuthenticated: true,
+        disputes: []
+      }
+    };
+  }
 };

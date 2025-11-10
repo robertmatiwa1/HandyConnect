@@ -3,6 +3,7 @@ import { View, Text, TextInput, StyleSheet, Pressable } from 'react-native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { useNavigation } from '@react-navigation/native';
 import { RootStackParamList } from '../navigation/RootNavigator';
+import { useAuthStore } from '../store/auth';
 
 const DEFAULT_SKILL = 'plumber';
 const DEFAULT_SUBURB = 'Bellville';
@@ -13,6 +14,7 @@ const HomeScreen: React.FC = () => {
   const navigation = useNavigation<NavigationProp>();
   const [skill, setSkill] = useState(DEFAULT_SKILL);
   const [suburb, setSuburb] = useState(DEFAULT_SUBURB);
+  const role = useAuthStore((state) => state.role);
 
   const handleSearch = () => {
     navigation.navigate('Search', { skill, suburb });
@@ -37,6 +39,14 @@ const HomeScreen: React.FC = () => {
       <Pressable onPress={handleSearch} style={({ pressed }) => [styles.button, pressed && styles.buttonPressed]}>
         <Text style={styles.buttonText}>Search providers</Text>
       </Pressable>
+      {role === 'PROVIDER' ? (
+        <Pressable
+          onPress={() => navigation.navigate('ProviderSettings')}
+          style={({ pressed }) => [styles.secondaryButton, pressed && styles.secondaryButtonPressed]}
+        >
+          <Text style={styles.secondaryButtonText}>Manage provider profile</Text>
+        </Pressable>
+      ) : null}
     </View>
   );
 };
@@ -75,6 +85,22 @@ const styles = StyleSheet.create({
     color: '#ffffff',
     fontWeight: '600',
     fontSize: 16
+  },
+  secondaryButton: {
+    marginTop: 16,
+    paddingVertical: 12,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: '#1f6feb',
+    alignItems: 'center',
+    backgroundColor: '#e0ecff'
+  },
+  secondaryButtonPressed: {
+    opacity: 0.9
+  },
+  secondaryButtonText: {
+    color: '#1f6feb',
+    fontWeight: '600'
   }
 });
 

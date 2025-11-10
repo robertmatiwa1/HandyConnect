@@ -12,10 +12,11 @@ import { useFocusEffect, useNavigation, useRoute, RouteProp } from '@react-navig
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { RootStackParamList } from '../navigation/RootNavigator';
 import { api } from '../api/client';
+import { useAuthStore } from '../store/auth';
 import RateProviderModal from '../components/RateProviderModal';
 import { useProvidersStore } from '../store/providers';
 
-type JobStatus = 'PENDING' | 'ACCEPTED' | 'IN_PROGRESS' | 'COMPLETED';
+type JobStatus = 'PENDING' | 'ACCEPTED' | 'IN_PROGRESS' | 'COMPLETED' | 'CANCELLED';
 
 interface Job {
   id: string;
@@ -45,6 +46,7 @@ const Dashboard: React.FC = () => {
   const [submittingReview, setSubmittingReview] = useState<boolean>(false);
   const [dismissedJobIds, setDismissedJobIds] = useState<string[]>([]);
   const updateProvider = useProvidersStore((state) => state.updateProvider);
+  const clearSession = useAuthStore((state) => state.clear);
 
   const fetchJobs = useCallback(async () => {
     setLoading(true);
@@ -155,7 +157,7 @@ const Dashboard: React.FC = () => {
   }, [jobs]);
 
   const pastJobs = useMemo(() => {
-    const completedStatuses: JobStatus[] = ['COMPLETED'];
+    const completedStatuses: JobStatus[] = ['COMPLETED', 'CANCELLED'];
     return jobs.filter((job) => completedStatuses.includes(job.status));
   }, [jobs]);
 
@@ -177,8 +179,17 @@ const Dashboard: React.FC = () => {
           <Section title="Past jobs" emptyMessage="No completed jobs." jobs={pastJobs} />
         </ScrollView>
       )}
-      <Pressable onPress={() => navigation.navigate('Home')} style={({ pressed }) => [styles.button, pressed && styles.buttonPressed]}>
+      <Pressable
+        onPress={() => navigation.navigate('Home')}
+        style={({ pressed }) => [styles.button, pressed && styles.buttonPressed]}
+      >
         <Text style={styles.buttonText}>Book another provider</Text>
+      </Pressable>
+      <Pressable
+        onPress={() => clearSession().then(() => navigation.reset({ index: 0, routes: [{ name: 'Login' }] }))}
+        style={({ pressed }) => [styles.logoutButton, pressed && styles.logoutButtonPressed]}
+      >
+        <Text style={styles.logoutText}>Sign out</Text>
       </Pressable>
       <RateProviderModal
         visible={Boolean(selectedJob)}
@@ -210,6 +221,7 @@ const STATUS_STYLES: Record<JobStatus, { label: string; background: string; colo
   ACCEPTED: { label: 'Accepted', background: '#d1fae5', color: '#047857' },
   IN_PROGRESS: { label: 'In progress', background: '#e0f2fe', color: '#0369a1' },
   COMPLETED: { label: 'Completed', background: '#e0e7ff', color: '#3730a3' },
+  CANCELLED: { label: 'Cancelled', background: '#fee2e2', color: '#b91c1c' },
 };
 
 const StatusBadge: React.FC<{ status: JobStatus }> = ({ status }) => {
@@ -350,6 +362,17 @@ const styles = StyleSheet.create({
     color: '#ffffff',
     fontWeight: '600',
     fontSize: 16
+  },
+  logoutButton: {
+    marginTop: 12,
+    alignItems: 'center'
+  },
+  logoutButtonPressed: {
+    opacity: 0.7
+  },
+  logoutText: {
+    color: '#ef4444',
+    fontWeight: '600'
   }
 });
 

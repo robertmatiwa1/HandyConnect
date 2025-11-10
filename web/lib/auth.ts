@@ -1,14 +1,10 @@
-﻿import { NextApiRequest, NextApiResponse } from "next";
+import { NextApiResponse } from "next";
 import { serialize } from "cookie";
 
-const SESSION_COOKIE = "handyconnect_auth";
-const VALID_USER = {
-  email: "ops@handyconnect.io",
-  password: "secureportal"
-};
+const SESSION_COOKIE = "handyconnect_auth_token";
 
-export function setAuthCookie(res: NextApiResponse) {
-  const cookie = serialize(SESSION_COOKIE, "authenticated", {
+export function setAuthCookie(res: NextApiResponse, token: string) {
+  const cookie = serialize(SESSION_COOKIE, token, {
     httpOnly: true,
     path: "/",
     sameSite: "lax",
@@ -29,18 +25,15 @@ export function clearAuthCookie(res: NextApiResponse) {
   res.setHeader("Set-Cookie", cookie);
 }
 
-export function authenticateRequest(req: NextApiRequest) {
-  const { email, password } = req.body as { email?: string; password?: string };
-
-  if (email === VALID_USER.email && password === VALID_USER.password) {
-    return true;
-  }
-
-  return false;
+export function getAuthTokenFromCookies(cookies: Partial<Record<string, string>>) {
+  return cookies[SESSION_COOKIE] ?? null;
 }
 
 export function isAuthenticatedFromCookies(cookies: Partial<Record<string, string>>) {
-  return cookies[SESSION_COOKIE] === "authenticated";
+  return Boolean(getAuthTokenFromCookies(cookies));
 }
 
-export const credentialsHint = VALID_USER;
+export const credentialsHint = {
+  email: process.env.NEXT_PUBLIC_PORTAL_HINT_EMAIL ?? "ops@handyconnect.io",
+  password: process.env.NEXT_PUBLIC_PORTAL_HINT_PASSWORD ?? "secureportal"
+};

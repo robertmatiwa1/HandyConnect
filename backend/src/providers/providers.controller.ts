@@ -24,6 +24,13 @@ export class ProvidersController {
     return this.providersService.getById(id);
   }
 
+  @Get('me')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(UserRole.PROVIDER)
+  getMe(@Req() req: RequestWithUser) {
+    return this.providersService.getForUser(req.user.id);
+  }
+
   @Patch('me')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(UserRole.PROVIDER)

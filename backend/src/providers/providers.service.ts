@@ -47,6 +47,19 @@ export class ProvidersService {
     return this.toResponse(profile);
   }
 
+  async getForUser(userId: string) {
+    const profile = await this.prisma.providerProfile.findUnique({
+      where: { userId },
+      include: { user: true, reviews: true },
+    });
+
+    if (!profile) {
+      throw new NotFoundException('Provider profile not found');
+    }
+
+    return this.toResponse(profile);
+  }
+
   async updateForUser(userId: string, dto: UpdateProviderProfileDto) {
     const existing = await this.prisma.providerProfile.findUnique({
       where: { userId },

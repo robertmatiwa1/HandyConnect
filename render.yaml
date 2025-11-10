@@ -1,0 +1,16 @@
+services:
+  - type: web
+    name: handyconnect-api
+    env: docker
+    dockerfilePath: backend/Dockerfile
+    dockerContext: backend
+    plan: starter
+    autoDeploy: true
+    envVars:
+      - key: DATABASE_URL
+        sync: false
+      - key: JWT_SECRET
+        sync: false
+      - key: EXPO_DEV_HOST
+        value: http://localhost:8081
+    healthCheckPath: /swagger

@@ -2,6 +2,7 @@ import { BadRequestException, Injectable, NotFoundException, UnauthorizedExcepti
 
 import { PrismaService } from '../prisma/prisma.service';
 import { PaymentStatus, PaymentsService } from '../payments/payments.service';
+import { sendNotification } from '../notifications/notification.service';
 import { UserRole } from '../users/user-role.enum';
 import { JobStatus } from './job-status.enum';
 import { CreateJobDto } from './dto/create-job.dto';
@@ -57,6 +58,13 @@ export class JobsService {
     };
 
     this.jobs.unshift(job);
+
+    sendNotification(
+      providerProfile.userId,
+      'JOB_REQUESTED',
+      `New job request ${job.id} scheduled for ${scheduledAt.toISOString()}.`,
+    );
+
     return await this.toResponse(job);
   }
 
@@ -93,7 +101,11 @@ export class JobsService {
     job.updatedAt = new Date().toISOString();
 
     if (dto.status === JobStatus.ACCEPTED) {
-      console.log(`[Push] Job ${job.id} accepted for customer ${job.customerId}`);
+      sendNotification(
+        job.customerId,
+        'JOB_ACCEPTED',
+        `Job ${job.id} has been accepted by ${job.providerName}.`,
+      );
     }
 
     if (dto.status === JobStatus.COMPLETED) {
@@ -105,6 +117,11 @@ export class JobsService {
         try {
           this.paymentsService.releaseEscrow(job.id);
           console.log(`[Payments] Escrow released for job ${job.id}`);
+          sendNotification(
+            job.providerUserId,
+            'PAYOUT_RELEASED',
+            `Payout released for job ${job.id}.`,
+          );
         } catch (error) {
           console.warn(`[Payments] Unable to release escrow for job ${job.id}: ${(error as Error).message}`);
         }

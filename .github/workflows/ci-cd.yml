@@ -71,7 +71,7 @@ jobs:
           path: backend/test-results/jest-results.json
 
       - name: Run Expo doctor
-        run: npx expo doctor --fix-dependencies
+        run: npx expo-doctor --fix-dependencies
         working-directory: mobile
 
       - name: Install EAS CLI

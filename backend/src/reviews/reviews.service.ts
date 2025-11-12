@@ -35,7 +35,7 @@ export class ReviewsService {
       throw new BadRequestException('Rating must be between 1 and 5');
     }
 
-    const job = this.jobsService.getJobById(dto.jobId);
+    const job = await this.jobsService.getJobById(dto.jobId);
     if (!job) {
       throw new NotFoundException('Job not found');
     }

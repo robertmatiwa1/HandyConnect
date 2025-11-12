@@ -1,14 +1,4 @@
-node_modules/
-.dist/
-dist/
-.env
-.env.*
-.prisma/
-﻿# Node and Expo build files
-node_modules/
-.expo/
-.expo-shared/
-dist/
+# Build artifacts
 build/
 android/
 ios/
@@ -36,6 +26,7 @@ Thumbs.db
 *.zip
 *.tar
 *.png
+mobile/assets/*.png
 *.jpg
 *.jpeg
 *.mp4
@@ -47,6 +38,15 @@ Thumbs.db
 # Temporary files
 *.tmp
 *.cache
+
+# Node and test artifacts
+node_modules/
+coverage/
+dist/
+
+# Expo cache
+.expo/
+.expo-shared/
 
 # Next.js build artifacts
 .next/

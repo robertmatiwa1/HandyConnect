@@ -79,12 +79,35 @@ jobs:
       - name: Install EAS CLI
         run: npm install -g eas-cli
 
-      # 11. Build Expo preview (Android)
+      # 11. Debug EAS/EXPO token presence
+      - name: Debug EAS/EXPO token presence
+        env:
+          EAS_TOKEN: ${{ secrets.EAS_TOKEN }}
+          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+        run: |
+          if [ -n "$EAS_TOKEN" ]; then
+            echo "EAS_TOKEN is set (masked)."
+          else
+            echo "EAS_TOKEN is NOT set."
+          fi
+          if [ -n "$EXPO_TOKEN" ]; then
+            echo "EXPO_TOKEN is set (masked)."
+          else
+            echo "EXPO_TOKEN is NOT set."
+          fi
+          npx eas whoami || echo "Not logged in to EAS CLI"
+
+      # 12. Build Expo preview (Android)
       - name: Build Expo preview (Android)
         working-directory: mobile
         env:
           EAS_TOKEN: ${{ secrets.EAS_TOKEN }}
+          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
         run: |
+          if [ -z "$EAS_TOKEN" ] && [ -z "$EXPO_TOKEN" ]; then
+            echo "Error: neither EAS_TOKEN nor EXPO_TOKEN is available in the environment. Ensure the secret is configured in repo settings and that this run is not from a fork."
+            exit 1
+          fi
           mkdir -p ../artifacts
           eas build --profile preview --platform android --non-interactive --json > ../artifacts/eas-build-result.json
 
@@ -95,7 +118,7 @@ jobs:
           name: expo-build-preview
           path: artifacts/eas-build-result.json
 
-      # 12. Generate Swagger documentation
+      # 13. Generate Swagger documentation
       - name: Generate Swagger documentation
         run: |
           cd backend
@@ -132,7 +155,7 @@ jobs:
           name: swagger-documentation
           path: artifacts/swagger.json
 
-      # 13. Deploy to Render (staging or production)
+      # 14. Deploy to Render (staging or production)
       - name: Deploy to Render
         if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/staging'
         env:
@@ -144,14 +167,14 @@ jobs:
             -H "Content-Type: application/json" \
             -d '{"clearCache":false}'
 
-      # 14. Run database seed
+      # 15. Run database seed
       - name: Run database seed
         working-directory: backend
         env:
           DATABASE_URL: ${{ github.ref == 'refs/heads/main' && secrets.PRODUCTION_DATABASE_URL || secrets.STAGING_DATABASE_URL }}
         run: npm run seed
 
-      # 15. Upload Swagger docs to S3
+      # 16. Upload Swagger docs to S3
       - name: Upload Swagger docs to S3
         env:
           AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}

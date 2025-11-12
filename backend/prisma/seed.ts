@@ -1,4 +1,4 @@
-import { PrismaClient, Role, JobStatus } from '@prisma/client';
+import { PrismaClient } from '@prisma/client';
 import { faker } from '@faker-js/faker';
 
 type CreatedProvider = {
@@ -67,7 +67,7 @@ async function createCustomers(): Promise<CreatedCustomer[]> {
         email: buildEmailFromName(name),
         password: faker.internet.password({ length: 12 }),
         name,
-        role: Role.CUSTOMER,
+        role: 'CUSTOMER',
       },
     });
 
@@ -90,7 +90,7 @@ async function createProviders(): Promise<CreatedProvider[]> {
         email: buildEmailFromName(name),
         password: faker.internet.password({ length: 12 }),
         name,
-        role: Role.PROVIDER,
+        role: 'PROVIDER',
       },
     });
 
@@ -124,20 +124,16 @@ async function createProviders(): Promise<CreatedProvider[]> {
 async function createJobs(customers: CreatedCustomer[], providers: CreatedProvider[]) {
   const jobsByProvider = new Map<string, { id: string; customerId: string }[]>();
 
-  const providerAssignments = faker.helpers.shuffle([
-    ...providers,
-    ...Array.from({ length: Math.max(0, 10 - providers.length) }, () => getRandomItem(providers)),
-  ]);
-
-  for (const provider of providerAssignments) {
+  for (let index = 0; index < 10; index += 1) {
+    const provider = getRandomItem(providers);
     const customer = getRandomItem(customers);
 
     const scheduledAt = faker.date.soon({ days: 30 });
     const status = faker.helpers.arrayElement([
-      JobStatus.PENDING,
-      JobStatus.ACCEPTED,
-      JobStatus.IN_PROGRESS,
-      JobStatus.COMPLETED,
+      'PENDING',
+      'ACCEPTED',
+      'IN_PROGRESS',
+      'COMPLETED',
     ]);
     const notes = faker.helpers.maybe(() => faker.lorem.sentence(), { probability: 0.6 }) ?? null;
 
@@ -154,9 +150,9 @@ async function createJobs(customers: CreatedCustomer[], providers: CreatedProvid
       },
     });
 
-    const existing = jobsByProvider.get(provider.profileId) ?? [];
-    existing.push({ id: job.id, customerId: customer.id });
-    jobsByProvider.set(provider.profileId, existing);
+    const jobsForProvider = jobsByProvider.get(provider.profileId) ?? [];
+    jobsForProvider.push({ id: job.id, customerId: customer.id });
+    jobsByProvider.set(provider.profileId, jobsForProvider);
   }
 
   return jobsByProvider;
@@ -172,7 +168,7 @@ async function createReviews(
 
     await prisma.job.update({
       where: { id: jobForReview.id },
-      data: { status: JobStatus.COMPLETED },
+      data: { status: 'COMPLETED' },
     });
 
     const rating = faker.number.int({ min: 3, max: 5 });

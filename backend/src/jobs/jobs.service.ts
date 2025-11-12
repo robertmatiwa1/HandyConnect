@@ -109,10 +109,6 @@ export class JobsService {
     });
 
     if (dto.status === JobStatus.ACCEPTED) {
-      console.log(
-        `[Push] Job ${updated.id} accepted by provider ${updated.provider.userId} for customer ${updated.customerId}`,
-      );
-
       sendNotification(
         updated.customerId,
         'JOB_ACCEPTED',
@@ -121,8 +117,6 @@ export class JobsService {
     }
 
     if (dto.status === JobStatus.COMPLETED) {
-      console.log(`[Push] Job ${updated.id} completed for customer ${updated.customerId}`);
-
       const payment = await this.paymentsService.getPayment(updated.id);
 
       if (payment && payment.status === PaymentStatus.ESCROW) {

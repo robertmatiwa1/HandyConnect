@@ -86,7 +86,7 @@ describe('ProvidersController (e2e)', () => {
         email: prisma.seeds.provider.email,
         password: prisma.seeds.provider.password,
       })
-      .expect(201);
+      .expect(200);
 
     const updateResponse = await request(app.getHttpServer())
       .patch('/providers/me')

@@ -81,12 +81,12 @@ describe('Application E2E', () => {
         email: prisma.seeds.customer.email,
         password: prisma.seeds.customer.password,
       })
-      .expect(201);
+      .expect(200);
 
     expect(response.body.user).toMatchObject({
       email: prisma.seeds.customer.email,
     });
-    expect(response.body.accessToken).toBeDefined();
+    expect(response.body.accessToken).toEqual(expect.any(String));
   });
 
   it('lists providers via GET /providers', async () => {

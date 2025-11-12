@@ -74,13 +74,13 @@ describe('AuthController (e2e)', () => {
         email: prisma.seeds.customer.email,
         password: prisma.seeds.customer.password,
       })
-      .expect(201);
+      .expect(200);
 
     expect(loginResponse.body.user).toMatchObject({
       email: prisma.seeds.customer.email,
       role: 'CUSTOMER',
     });
-    expect(loginResponse.body.accessToken).toBeDefined();
+    expect(loginResponse.body.accessToken).toEqual(expect.any(String));
   });
 
   it('returns the authenticated profile', async () => {
@@ -90,7 +90,7 @@ describe('AuthController (e2e)', () => {
         email: prisma.seeds.customer.email,
         password: prisma.seeds.customer.password,
       })
-      .expect(201);
+      .expect(200);
 
     const profileResponse = await request(app.getHttpServer())
       .get('/auth/profile')

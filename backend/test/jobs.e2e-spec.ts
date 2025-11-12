@@ -49,9 +49,9 @@ describe('JobsController (e2e)', () => {
         email: prisma.seeds.customer.email,
         password: prisma.seeds.customer.password,
       })
-      .expect(201);
+      .expect(200);
 
-    return response.body.accessToken;
+    return response.body.accessToken as string;
   }
 
   async function loginProvider() {
@@ -61,9 +61,9 @@ describe('JobsController (e2e)', () => {
         email: prisma.seeds.provider.email,
         password: prisma.seeds.provider.password,
       })
-      .expect(201);
+      .expect(200);
 
-    return response.body.accessToken;
+    return response.body.accessToken as string;
   }
 
   it('creates a job for the customer', async () => {

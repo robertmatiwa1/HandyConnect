@@ -1,9 +1,3 @@
-mobile/scripts/ensure-assets.mjs
-New
-+48
--0
-
-#!/usr/bin/env node
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';

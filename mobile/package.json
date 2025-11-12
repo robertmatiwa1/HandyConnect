@@ -4,8 +4,14 @@
   "version": "1.0.0",
   "private": true,
   "scripts": {
-    "start": "expo start"
-  },
+    "ensure:assets": "node ./scripts/ensure-assets.mjs",
+    "start": "expo start",
+    "android": "expo run:android",
+    "ios": "expo run:ios",
+    "test": "jest"
+  }
+
+,
   "dependencies": {
     "@react-navigation/native": "^6.1.9",
     "@react-navigation/native-stack": "^6.9.17",

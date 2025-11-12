@@ -49,9 +49,9 @@ describe('PaymentsController (e2e)', () => {
         email: prisma.seeds.customer.email,
         password: prisma.seeds.customer.password,
       })
-      .expect(201);
+      .expect(200);
 
-    return response.body.accessToken;
+    return response.body.accessToken as string;
   }
 
   it('creates a checkout session and processes payment webhooks', async () => {

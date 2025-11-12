@@ -1,24 +1,29 @@
-name: CI/CD
+name: HandyConnect CI/CD
 
 on:
   push:
-    branches: [ main ]
+    branches: [ main, staging ]
   pull_request:
-    branches: [ main ]
+    branches: [ main, staging ]
 
 jobs:
-  build:
+  build-test-deploy:
     runs-on: ubuntu-latest
+    env:
+      CI: true
 
     steps:
+      # 1. Checkout repository
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Use Node.js 18
+      # 2. Setup Node 18
+      - name: Setup Node.js 18
         uses: actions/setup-node@v4
         with:
-          node-version: '18'
+          node-version: 18
 
+      # 3. Restore backend cache
       - name: Restore backend cache
         uses: actions/cache@v4
         with:
@@ -27,15 +32,27 @@ jobs:
           restore-keys: |
             Linux-backend-
 
+      # 4. Install backend dependencies (always runs even if cache hit)
       - name: Install backend dependencies
         run: |
           cd backend
           npm ci
 
-      - name: Debug backend node_modules
-        if: ${{ always() }}
-        run: ls -la backend/node_modules || true
+      # 5. Run backend tests
+      - name: Run backend e2e test suite
+        working-directory: backend
+        run: |
+          mkdir -p test-results
+          npm run test:e2e -- --runInBand --ci --json --outputFile=test-results/jest-results.json
 
+      - name: Upload backend test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: backend-test-results
+          path: backend/test-results/jest-results.json
+
+      # 6. Restore mobile cache
       - name: Restore mobile cache
         uses: actions/cache@v4
         with:
@@ -44,14 +61,104 @@ jobs:
           restore-keys: |
             Linux-mobile-
 
+      # 7. Install mobile dependencies
       - name: Install mobile dependencies
         run: |
           cd mobile
           npm ci
 
-      - name: Debug mobile node_modules
-        if: ${{ always() }}
-        run: ls -la mobile/node_modules || true
+      # 8. Ensure Expo assets
+      - name: Ensure Expo assets
+        run: npm run ensure:assets
+        working-directory: mobile
 
-      - name: Continue
-        run: echo "Dependencies installed"
+      # 9. Run Expo doctor
+      - name: Run Expo doctor
+        run: npx expo-doctor
+        working-directory: mobile
+
+      # 10. Install EAS CLI
+      - name: Install EAS CLI
+        run: npm install -g eas-cli
+
+      # 11. Build Expo preview (Android)
+      - name: Build Expo preview (Android)
+        env:
+          EAS_TOKEN: ${{ secrets.EAS_TOKEN }}
+        run: |
+          mkdir -p artifacts
+          cd mobile
+          eas build --profile preview --platform android --non-interactive --json > ../artifacts/eas-build-result.json
+
+      - name: Upload Expo build info
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: expo-build-preview
+          path: artifacts/eas-build-result.json
+
+      # 12. Generate Swagger documentation
+      - name: Generate Swagger documentation
+        run: |
+          cd backend
+          mkdir -p ../artifacts
+          node - <<'NODE'
+          import { mkdirSync, writeFileSync } from 'fs';
+          import { Test } from '@nestjs/testing';
+          import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
+          import { AppModule } from './src/app.module.js';
+          import { PrismaService } from './src/prisma/prisma.service.js';
+          const prismaMock = new Proxy(
+            { $connect: async()=>{}, $disconnect:async()=>{}, $on:()=>{}, enableShutdownHooks:async()=>{} },
+            { get:(t,p)=>p in t?t[p]:async()=>undefined }
+          );
+          const generate = async()=>{
+            const moduleRef=await Test.createTestingModule({imports:[AppModule]})
+              .overrideProvider(PrismaService).useValue(prismaMock).compile();
+            const app=moduleRef.createNestApplication(); await app.init();
+            const config=new DocumentBuilder().setTitle('HandyConnect API')
+              .setDescription('API documentation for HandyConnect')
+              .setVersion('1.0').addBearerAuth().build();
+            const document=SwaggerModule.createDocument(app,config);
+            mkdirSync('../artifacts',{recursive:true});
+            writeFileSync('../artifacts/swagger.json',JSON.stringify(document,null,2));
+            await app.close();
+          };
+          generate().catch(e=>{console.error(e);process.exit(1);});
+          NODE
+
+      - name: Upload Swagger documentation artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: swagger-documentation
+          path: artifacts/swagger.json
+
+      # 13. Deploy to Render (staging or production)
+      - name: Deploy to Render
+        if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/staging'
+        env:
+          RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
+          RENDER_SERVICE_ID: ${{ github.ref == 'refs/heads/main' && secrets.RENDER_PRODUCTION_SERVICE_ID || secrets.RENDER_STAGING_SERVICE_ID }}
+        run: |
+          curl -X POST https://api.render.com/v1/services/$RENDER_SERVICE_ID/deploys \
+            -H "Authorization: Bearer $RENDER_API_KEY" \
+            -H "Content-Type: application/json" \
+            -d '{"clearCache":false}'
+
+      # 14. Run database seed (depending on environment)
+      - name: Run database seed
+        working-directory: backend
+        env:
+          DATABASE_URL: ${{ github.ref == 'refs/heads/main' && secrets.PRODUCTION_DATABASE_URL || secrets.STAGING_DATABASE_URL }}
+        run: npm run seed
+
+      # 15. Upload Swagger docs to S3
+      - name: Upload Swagger docs to S3
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: ${{ secrets.AWS_DEFAULT_REGION }}
+          SWAGGER_BUCKET_NAME: ${{ secrets.SWAGGER_BUCKET_NAME }}
+        run: |
+          aws s3 cp artifacts/swagger.json s3://$SWAGGER_BUCKET_NAME/${{ github.ref_name }}-swagger.json --cache-control max-age=300

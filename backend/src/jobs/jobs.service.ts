@@ -109,6 +109,10 @@ export class JobsService {
     });
 
     if (dto.status === JobStatus.ACCEPTED) {
+      console.log(
+        `[Push] Job ${updated.id} accepted by provider ${updated.provider.userId} for customer ${updated.customerId}`,
+      );
+
       sendNotification(
         updated.customerId,
         'JOB_ACCEPTED',

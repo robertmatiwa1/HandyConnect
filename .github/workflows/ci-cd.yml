@@ -79,48 +79,26 @@ jobs:
       - name: Install EAS CLI
         run: npm install -g eas-cli
 
-      # 11. Debug token presence
-      - name: Debug EAS/EXPO token presence
-        env:
-          EAS_TOKEN: ${{ secrets.EAS_TOKEN }}
-          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
-        run: |
-          if [ -n "$EAS_TOKEN" ]; then
-            echo "EAS_TOKEN is set (masked)."
-          else
-            echo "EAS_TOKEN is NOT set."
-          fi
-          if [ -n "$EXPO_TOKEN" ]; then
-            echo "EXPO_TOKEN is set (masked)."
-          else
-            echo "EXPO_TOKEN is NOT set."
-          fi
-          npx eas whoami || echo "Not logged in to EAS CLI"
-
-      # 12. Skip EAS build step if no tokens (fork or missing secrets)
-      - name: Skip EAS build on forks / when no token
-        if: ${{ secrets.EXPO_TOKEN == '' && secrets.EAS_TOKEN == '' }}
-        run: echo "EXPO_TOKEN/EAS_TOKEN not present — skipping EAS build (likely a fork or missing secret)."
-
-      # 13. EAS Build only if token(s) are present
+      # 11. Verify EAS authentication and build
       - name: Build Expo preview (Android)
-        if: ${{ secrets.EXPO_TOKEN != '' || secrets.EAS_TOKEN != '' }}
         working-directory: mobile
         env:
-          EAS_TOKEN: ${{ secrets.EAS_TOKEN }}
-          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+          EXPO_TOKEN: ${{ secrets.EAS_TOKEN }}
         run: |
           mkdir -p ../artifacts
-          eas build --profile preview --platform android --non-interactive --json > ../artifacts/eas-build-result.json
+          echo "Authenticating with Expo..."
+          npx eas whoami --token $EXPO_TOKEN
+          echo "Starting Expo build for Android..."
+          npx eas build --profile preview --platform android --non-interactive --token $EXPO_TOKEN --json > ../artifacts/eas-build-result.json
 
       - name: Upload Expo build info
-        if: ${{ secrets.EXPO_TOKEN != '' || secrets.EAS_TOKEN != '' }}
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: expo-build-preview
           path: artifacts/eas-build-result.json
 
-      # 14. Generate Swagger documentation
+      # 12. Generate Swagger documentation
       - name: Generate Swagger documentation
         run: |
           cd backend
@@ -135,16 +113,16 @@ jobs:
             { $connect: async()=>{}, $disconnect:async()=>{}, $on:()=>{}, enableShutdownHooks:async()=>{} },
             { get:(t,p)=>p in t?t[p]:async()=>undefined }
           );
-          const generate = async()=>{
-            const moduleRef=await Test.createTestingModule({imports:[AppModule]})
+          const generate = async()=> {
+            const moduleRef = await Test.createTestingModule({imports:[AppModule]})
               .overrideProvider(PrismaService).useValue(prismaMock).compile();
-            const app=moduleRef.createNestApplication(); await app.init();
-            const config=new DocumentBuilder().setTitle('HandyConnect API')
+            const app = moduleRef.createNestApplication(); await app.init();
+            const config = new DocumentBuilder().setTitle('HandyConnect API')
               .setDescription('API documentation for HandyConnect')
               .setVersion('1.0').addBearerAuth().build();
-            const document=SwaggerModule.createDocument(app,config);
+            const document = SwaggerModule.createDocument(app, config);
             mkdirSync('../artifacts',{recursive:true});
-            writeFileSync('../artifacts/swagger.json',JSON.stringify(document,null,2));
+            writeFileSync('../artifacts/swagger.json', JSON.stringify(document,null,2));
             await app.close();
           };
           generate().catch(e=>{console.error(e);process.exit(1);});
@@ -157,7 +135,7 @@ jobs:
           name: swagger-documentation
           path: artifacts/swagger.json
 
-      # 15. Deploy to Render (staging or production)
+      # 13. Deploy to Render (staging or production)
       - name: Deploy to Render
         if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/staging'
         env:
@@ -169,14 +147,14 @@ jobs:
             -H "Content-Type: application/json" \
             -d '{"clearCache":false}'
 
-      # 16. Run database seed
+      # 14. Run database seed
       - name: Run database seed
         working-directory: backend
         env:
           DATABASE_URL: ${{ github.ref == 'refs/heads/main' && secrets.PRODUCTION_DATABASE_URL || secrets.STAGING_DATABASE_URL }}
         run: npm run seed
 
-      # 17. Upload Swagger docs to S3
+      # 15. Upload Swagger docs to S3
       - name: Upload Swagger docs to S3
         env:
           AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}

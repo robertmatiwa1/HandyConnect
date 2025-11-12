@@ -4,8 +4,6 @@ import { PaymentStatus } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { JobStatus } from '../jobs/job-status.enum';
 
-const PSP_BASE_URL = process.env.PSP_BASE_URL ?? 'https://checkout.handypayments.dev/session';
-
 @Injectable()
 export class PaymentsService {
   constructor(private readonly prisma: PrismaService) {}
@@ -34,7 +32,7 @@ export class PaymentsService {
 
     const commissionCents = Math.round(amountCents * 0.1);
     const providerPayoutCents = Math.max(amountCents - commissionCents, 0);
-    const checkoutUrl = `${PSP_BASE_URL}?job=${jobId}`;
+    const checkoutUrl = `https://sandbox.payfast.co.za/fake?id=${jobId}`;
 
     const payment = await this.prisma.payment.upsert({
       where: { jobId },
@@ -55,7 +53,7 @@ export class PaymentsService {
       },
     });
 
-    return { checkoutUrl: payment.checkoutUrl, payment };
+    return { checkoutUrl: payment.checkoutUrl };
   }
 
   async handleWebhook(jobId: string, status: PaymentStatus) {

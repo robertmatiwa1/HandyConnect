@@ -15,12 +15,12 @@ export class PaymentsController {
   @Post('checkout')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(UserRole.CUSTOMER)
-  createCheckout(@Body() body: { jobId: string; amountCents: number }) {
+  async createCheckout(@Body() body: { jobId: string; amountCents: number }) {
     if (!body.jobId || typeof body.amountCents !== 'number') {
       throw new BadRequestException('jobId and amountCents are required');
     }
 
-    const checkout = this.paymentsService.createCheckout(body.jobId, body.amountCents);
+    const checkout = await this.paymentsService.createCheckout(body.jobId, body.amountCents);
 
     return {
       message: 'Checkout created',
@@ -29,7 +29,7 @@ export class PaymentsController {
   }
 
   @Post('webhook')
-  handleWebhook(@Body() body: { jobId: string; status: PaymentStatus | string }) {
+  async handleWebhook(@Body() body: { jobId: string; status: PaymentStatus | string }) {
     if (!body.jobId || !body.status) {
       throw new BadRequestException('jobId and status are required');
     }
@@ -41,7 +41,7 @@ export class PaymentsController {
       throw new BadRequestException('Unsupported payment status');
     }
 
-    const payment = this.paymentsService.handleWebhook(body.jobId, normalizedStatus);
+    const payment = await this.paymentsService.handleWebhook(body.jobId, normalizedStatus);
 
     return {
       message: `Payment marked as ${payment.status}`,

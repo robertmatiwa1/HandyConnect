@@ -14,7 +14,7 @@ jobs:
 
     steps:
       # 1. Checkout repository
-      - name: Checkout
+      - name: Checkout repository
         uses: actions/checkout@v4
 
       # 2. Setup Node 18
@@ -32,13 +32,12 @@ jobs:
           restore-keys: |
             Linux-backend-
 
-      # 4. Install backend dependencies (always runs even if cache hit)
+      # 4. Install backend dependencies
       - name: Install backend dependencies
-        run: |
-          cd backend
-          npm ci
+        working-directory: backend
+        run: npm ci
 
-      # 5. Run backend tests
+      # 5. Run backend e2e tests
       - name: Run backend e2e test suite
         working-directory: backend
         run: |
@@ -63,19 +62,18 @@ jobs:
 
       # 7. Install mobile dependencies
       - name: Install mobile dependencies
-        run: |
-          cd mobile
-          npm ci
+        working-directory: mobile
+        run: npm ci
 
       # 8. Ensure Expo assets
       - name: Ensure Expo assets
-        run: npm run ensure:assets
         working-directory: mobile
+        run: npm run ensure:assets
 
       # 9. Run Expo doctor
       - name: Run Expo doctor
-        run: npx expo-doctor
         working-directory: mobile
+        run: npx expo-doctor
 
       # 10. Install EAS CLI
       - name: Install EAS CLI
@@ -83,11 +81,11 @@ jobs:
 
       # 11. Build Expo preview (Android)
       - name: Build Expo preview (Android)
+        working-directory: mobile
         env:
           EAS_TOKEN: ${{ secrets.EAS_TOKEN }}
         run: |
-          mkdir -p artifacts
-          cd mobile
+          mkdir -p ../artifacts
           eas build --profile preview --platform android --non-interactive --json > ../artifacts/eas-build-result.json
 
       - name: Upload Expo build info
@@ -146,7 +144,7 @@ jobs:
             -H "Content-Type: application/json" \
             -d '{"clearCache":false}'
 
-      # 14. Run database seed (depending on environment)
+      # 14. Run database seed
       - name: Run database seed
         working-directory: backend
         env:

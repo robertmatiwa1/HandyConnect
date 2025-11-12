@@ -158,6 +158,27 @@ export class PrismaTestService {
       portfolio: ['https://example.com/portfolio/plumbing'],
     });
 
+    const firstReviewDate = new Date();
+    this.reviews.push({
+      id: this.generateReviewId(),
+      jobId: 'job_seed_1',
+      providerId: providerProfile.id,
+      customerId: customer.id,
+      rating: 4,
+      comment: 'Solid workmanship and fast response.',
+      createdAt: firstReviewDate,
+    });
+
+    this.reviews.push({
+      id: this.generateReviewId(),
+      jobId: 'job_seed_2',
+      providerId: providerProfile.id,
+      customerId: customer.id,
+      rating: 5,
+      comment: 'Excellent service! Highly recommend.',
+      createdAt: new Date(firstReviewDate.getTime() + 60_000),
+    });
+
     const secondaryProvider = await this.createSeedUser({
       email: this.seeds.secondaryProvider.email,
       password: this.seeds.secondaryProvider.password,
@@ -453,6 +474,11 @@ export class PrismaTestService {
 
   private generateProviderId() {
     const id = `provider_${this.providerCounter++}`;
+    return id;
+  }
+
+  private generateReviewId() {
+    const id = `review_${this.reviewCounter++}`;
     return id;
   }
 }

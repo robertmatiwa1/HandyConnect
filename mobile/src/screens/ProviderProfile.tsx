@@ -111,7 +111,12 @@ const ProviderProfile: React.FC = () => {
       <Text style={styles.name}>{displayProvider.name}</Text>
       <Text style={styles.meta}>{displayProvider.skill} • {displayProvider.suburb}</Text>
       {typeof displayProvider.rating === 'number' ? (
-        <Rating value={displayProvider.rating} count={displayProvider.ratingCount} />
+        <View style={styles.ratingContainer}>
+          <Rating value={displayProvider.rating} count={displayProvider.ratingCount} />
+          <Text style={styles.ratingSummary}>
+            {displayProvider.rating.toFixed(1)} average ({displayProvider.ratingCount ?? 0} reviews)
+          </Text>
+        </View>
       ) : null}
       {typeof displayProvider.experienceYears === 'number' ? (
         <Text style={styles.metaDetail}>
@@ -193,6 +198,13 @@ const styles = StyleSheet.create({
   metaDetail: {
     color: '#4b5563',
     marginBottom: 12,
+  },
+  ratingContainer: {
+    marginBottom: 12,
+  },
+  ratingSummary: {
+    color: '#4b5563',
+    marginTop: 6,
   },
   rate: {
     fontWeight: '600',

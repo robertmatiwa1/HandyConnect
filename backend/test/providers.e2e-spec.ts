@@ -45,6 +45,8 @@ describe('ProvidersController (e2e)', () => {
           name: prisma.seeds.provider.name,
           skill: 'Plumbing',
           suburb: 'Cape Town',
+          rating: 4.5,
+          ratingCount: 2,
         }),
       ]),
     );
@@ -72,6 +74,8 @@ describe('ProvidersController (e2e)', () => {
       id: prisma.seeds.provider.profileId,
       name: prisma.seeds.provider.name,
       suburb: 'Cape Town',
+      rating: 4.5,
+      ratingCount: 2,
     });
   });
 

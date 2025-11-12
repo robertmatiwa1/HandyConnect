@@ -7,6 +7,7 @@ const config: Config = {
   transform: {
     '^.+\\.(t|j)s$': 'ts-jest',
   },
+  setupFiles: ['<rootDir>/test/setup-prisma-client.ts'],
   globals: {
     'ts-jest': {
       diagnostics: false,

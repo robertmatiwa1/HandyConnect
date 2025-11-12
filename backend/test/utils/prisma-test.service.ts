@@ -1,5 +1,6 @@
 import * as argon2 from 'argon2';
 
+import { JobStatus } from '../../src/jobs/job-status.enum';
 import { UserRole } from '../../src/users/user-role.enum';
 
 interface InMemoryUser {
@@ -38,6 +39,33 @@ interface InMemoryReview {
   createdAt: Date;
 }
 
+interface InMemoryJob {
+  id: string;
+  customerId: string;
+  providerProfileId: string;
+  title: string;
+  notes: string | null;
+  scheduledAt: Date;
+  suburb: string;
+  priceCents: number;
+  status: JobStatus;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+type PaymentStatusValue = 'PENDING' | 'ESCROW' | 'PAID';
+
+interface InMemoryPayment {
+  jobId: string;
+  amountCents: number;
+  commissionCents: number;
+  providerPayoutCents: number;
+  checkoutUrl: string;
+  status: PaymentStatusValue;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
 type ProviderInclude = {
   user?: boolean;
   reviews?: boolean;
@@ -57,6 +85,25 @@ interface ProviderWhereUnique {
 interface ReviewWhereUnique {
   jobId?: string;
 }
+
+interface JobWhereUnique {
+  id?: string;
+}
+
+type JobInclude = {
+  provider?: { include?: { user?: boolean } } | boolean;
+  review?: boolean;
+  payment?: boolean;
+};
+
+type JobWhere = {
+  customerId?: string;
+  provider?: { userId?: string };
+};
+
+type OrderBy = {
+  createdAt?: 'asc' | 'desc';
+};
 
 function cloneDate(value: Date) {
   return new Date(value.getTime());
@@ -79,22 +126,45 @@ function cloneReview(review: InMemoryReview): InMemoryReview {
   return { ...review, createdAt: cloneDate(review.createdAt) };
 }
 
+function cloneJob(job: InMemoryJob): InMemoryJob {
+  return {
+    ...job,
+    scheduledAt: cloneDate(job.scheduledAt),
+    createdAt: cloneDate(job.createdAt),
+    updatedAt: cloneDate(job.updatedAt),
+  };
+}
+
+function clonePayment(payment: InMemoryPayment): InMemoryPayment {
+  return {
+    ...payment,
+    createdAt: cloneDate(payment.createdAt),
+    updatedAt: cloneDate(payment.updatedAt),
+  };
+}
+
 export class PrismaTestService {
   private users: InMemoryUser[] = [];
   private providerProfiles: InMemoryProviderProfile[] = [];
   private reviews: InMemoryReview[] = [];
+  private jobs: InMemoryJob[] = [];
+  private payments: InMemoryPayment[] = [];
 
   private initialUsers: InMemoryUser[] = [];
   private initialProviderProfiles: InMemoryProviderProfile[] = [];
   private initialReviews: InMemoryReview[] = [];
+  private initialJobs: InMemoryJob[] = [];
+  private initialPayments: InMemoryPayment[] = [];
 
   private userCounter = 1;
   private providerCounter = 1;
   private reviewCounter = 1;
+  private jobCounter = 1;
 
   private initialUserCounter = 1;
   private initialProviderCounter = 1;
   private initialReviewCounter = 1;
+  private initialJobCounter = 1;
 
   public seeds = {
     customer: {
@@ -126,9 +196,12 @@ export class PrismaTestService {
     this.users = [];
     this.providerProfiles = [];
     this.reviews = [];
+    this.jobs = [];
+    this.payments = [];
     this.userCounter = 1;
     this.providerCounter = 1;
     this.reviewCounter = 1;
+    this.jobCounter = 1;
 
     const customer = await this.createSeedUser({
       email: this.seeds.customer.email,
@@ -206,18 +279,24 @@ export class PrismaTestService {
     this.initialUsers = this.users.map(cloneUser);
     this.initialProviderProfiles = this.providerProfiles.map(cloneProvider);
     this.initialReviews = this.reviews.map(cloneReview);
+    this.initialJobs = this.jobs.map(cloneJob);
+    this.initialPayments = this.payments.map(clonePayment);
     this.initialUserCounter = this.userCounter;
     this.initialProviderCounter = this.providerCounter;
     this.initialReviewCounter = this.reviewCounter;
+    this.initialJobCounter = this.jobCounter;
   }
 
   async reset() {
     this.users = this.initialUsers.map(cloneUser);
     this.providerProfiles = this.initialProviderProfiles.map(cloneProvider);
     this.reviews = this.initialReviews.map(cloneReview);
+    this.jobs = this.initialJobs.map(cloneJob);
+    this.payments = this.initialPayments.map(clonePayment);
     this.userCounter = this.initialUserCounter;
     this.providerCounter = this.initialProviderCounter;
     this.reviewCounter = this.initialReviewCounter;
+    this.jobCounter = this.initialJobCounter;
   }
 
   async $connect() {
@@ -339,6 +418,147 @@ export class PrismaTestService {
     findUnique: async ({ where }: { where: ReviewWhereUnique }) => {
       const review = this.reviews.find((item) => item.jobId === where.jobId);
       return review ? cloneReview(review) : null;
+    },
+  };
+
+  job = {
+    create: async ({ data, include }: { data: any; include?: JobInclude }) => {
+      const now = new Date();
+      const job: InMemoryJob = {
+        id: this.generateJobId(),
+        customerId: data.customerId,
+        providerProfileId: data.providerProfileId,
+        title: data.title,
+        notes: data.notes ?? null,
+        scheduledAt: data.scheduledAt ?? this.getDefaultScheduledAt(now),
+        suburb: data.suburb,
+        priceCents: data.priceCents ?? 0,
+        status: data.status ?? JobStatus.PENDING,
+        createdAt: now,
+        updatedAt: now,
+      };
+      this.jobs.push(job);
+      return this.applyJobInclude(job, include);
+    },
+    findMany: async ({ where, include, orderBy }: { where?: JobWhere; include?: JobInclude; orderBy?: OrderBy } = {}) => {
+      let results = [...this.jobs];
+      if (where?.customerId) {
+        results = results.filter((job) => job.customerId === where.customerId);
+      }
+      if (where?.provider?.userId) {
+        results = results.filter((job) => {
+          const profile = this.providerProfiles.find((item) => item.id === job.providerProfileId);
+          return profile ? profile.userId === where.provider?.userId : false;
+        });
+      }
+
+      if (orderBy?.createdAt) {
+        results.sort((a, b) =>
+          orderBy.createdAt === 'desc'
+            ? b.createdAt.getTime() - a.createdAt.getTime()
+            : a.createdAt.getTime() - b.createdAt.getTime(),
+        );
+      }
+
+      return results.map((job) => this.applyJobInclude(job, include));
+    },
+    findFirst: async ({ where, include }: { where?: JobWhere; include?: JobInclude } = {}) => {
+      const [first] = await this.job.findMany({ where, include });
+      return first ?? null;
+    },
+    findUnique: async ({ where, include }: { where: JobWhereUnique; include?: JobInclude }) => {
+      const job = this.jobs.find((item) => item.id === where.id);
+      return job ? this.applyJobInclude(job, include) : null;
+    },
+    update: async ({ where, data, include }: { where: JobWhereUnique; data: any; include?: JobInclude }) => {
+      const job = this.jobs.find((item) => item.id === where.id);
+      if (!job) {
+        return null;
+      }
+
+      if (Object.prototype.hasOwnProperty.call(data, 'status')) {
+        job.status = data.status ?? job.status;
+      }
+      if (Object.prototype.hasOwnProperty.call(data, 'notes')) {
+        job.notes = data.notes ?? null;
+      }
+      if (Object.prototype.hasOwnProperty.call(data, 'scheduledAt')) {
+        job.scheduledAt = data.scheduledAt ?? job.scheduledAt;
+      }
+      if (Object.prototype.hasOwnProperty.call(data, 'priceCents')) {
+        job.priceCents = data.priceCents ?? job.priceCents;
+      }
+      job.updatedAt = new Date();
+
+      return this.applyJobInclude(job, include);
+    },
+  };
+
+  payment = {
+    upsert: async ({ where, update, create }: { where: { jobId: string }; update: any; create: any }) => {
+      let payment = this.payments.find((item) => item.jobId === where.jobId);
+      if (payment) {
+        if (Object.prototype.hasOwnProperty.call(update, 'amountCents')) {
+          payment.amountCents = update.amountCents ?? payment.amountCents;
+        }
+        if (Object.prototype.hasOwnProperty.call(update, 'commissionCents')) {
+          payment.commissionCents = update.commissionCents ?? payment.commissionCents;
+        }
+        if (Object.prototype.hasOwnProperty.call(update, 'providerPayoutCents')) {
+          payment.providerPayoutCents = update.providerPayoutCents ?? payment.providerPayoutCents;
+        }
+        if (Object.prototype.hasOwnProperty.call(update, 'checkoutUrl')) {
+          payment.checkoutUrl = update.checkoutUrl ?? payment.checkoutUrl;
+        }
+        if (Object.prototype.hasOwnProperty.call(update, 'status')) {
+          payment.status = update.status ?? payment.status;
+        }
+        payment.updatedAt = new Date();
+      } else {
+        const now = new Date();
+        payment = {
+          jobId: where.jobId,
+          amountCents: create.amountCents,
+          commissionCents: create.commissionCents ?? 0,
+          providerPayoutCents: create.providerPayoutCents ?? 0,
+          checkoutUrl: create.checkoutUrl ?? '',
+          status: create.status ?? 'PENDING',
+          createdAt: now,
+          updatedAt: now,
+        };
+        this.payments.push(payment);
+      }
+
+      return clonePayment(payment);
+    },
+    update: async ({ where, data }: { where: { jobId: string }; data: any }) => {
+      const payment = this.payments.find((item) => item.jobId === where.jobId);
+      if (!payment) {
+        return null;
+      }
+
+      if (Object.prototype.hasOwnProperty.call(data, 'status')) {
+        payment.status = data.status ?? payment.status;
+      }
+      if (Object.prototype.hasOwnProperty.call(data, 'checkoutUrl')) {
+        payment.checkoutUrl = data.checkoutUrl ?? payment.checkoutUrl;
+      }
+      if (Object.prototype.hasOwnProperty.call(data, 'amountCents')) {
+        payment.amountCents = data.amountCents ?? payment.amountCents;
+      }
+      if (Object.prototype.hasOwnProperty.call(data, 'commissionCents')) {
+        payment.commissionCents = data.commissionCents ?? payment.commissionCents;
+      }
+      if (Object.prototype.hasOwnProperty.call(data, 'providerPayoutCents')) {
+        payment.providerPayoutCents = data.providerPayoutCents ?? payment.providerPayoutCents;
+      }
+      payment.updatedAt = new Date();
+
+      return clonePayment(payment);
+    },
+    findUnique: async ({ where }: { where: { jobId: string } }) => {
+      const payment = this.payments.find((item) => item.jobId === where.jobId);
+      return payment ? clonePayment(payment) : null;
     },
   };
 
@@ -467,6 +687,43 @@ export class PrismaTestService {
     return enriched;
   }
 
+  private applyJobInclude(job: InMemoryJob, include?: JobInclude) {
+    const result: any = cloneJob(job);
+
+    if (include?.provider) {
+      const providerProfile = this.providerProfiles.find((item) => item.id === job.providerProfileId);
+      if (providerProfile) {
+        const provider = cloneProvider(providerProfile);
+        if (typeof include.provider === 'object' && include.provider?.include?.user) {
+          const user = this.users.find((item) => item.id === providerProfile.userId);
+          provider.user = user ? cloneUser(user) : null;
+        }
+        result.provider = provider;
+      } else {
+        result.provider = null;
+      }
+    }
+
+    if (include?.review) {
+      const review = this.reviews.find((item) => item.jobId === job.id);
+      result.review = review ? cloneReview(review) : null;
+    }
+
+    if (include?.payment) {
+      const payment = this.payments.find((item) => item.jobId === job.id);
+      result.payment = payment ? clonePayment(payment) : null;
+    }
+
+    return result;
+  }
+
+  private getDefaultScheduledAt(now: Date) {
+    const scheduled = new Date(now);
+    scheduled.setDate(scheduled.getDate() + 2);
+    scheduled.setHours(10, 0, 0, 0);
+    return scheduled;
+  }
+
   private generateUserId() {
     const id = `user_${this.userCounter++}`;
     return id;
@@ -479,6 +736,11 @@ export class PrismaTestService {
 
   private generateReviewId() {
     const id = `review_${this.reviewCounter++}`;
+    return id;
+  }
+
+  private generateJobId() {
+    const id = `job_${this.jobCounter++}`;
     return id;
   }
 }

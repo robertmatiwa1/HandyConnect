@@ -11,7 +11,6 @@ jobs:
     runs-on: ubuntu-latest
     env:
       CI: true
-      EAS_TOKEN: ${{ secrets.EAS_TOKEN }}
 
     steps:
       - name: Checkout repository
@@ -22,36 +21,38 @@ jobs:
         with:
           node-version: 18
 
+      # Backend cache
       - name: Restore backend cache
         uses: actions/cache@v4
         with:
           path: backend/node_modules
-          key: Linux-backend-${{ hashFiles('backend/package-lock.json') }}
-          restore-keys: Linux-backend-
+          key: backend-${{ hashFiles('backend/package-lock.json') }}
+          restore-keys: backend-
 
       - name: Install backend dependencies
         working-directory: backend
         run: npm ci
 
-      - name: Run backend e2e test suite
+      - name: Run backend e2e tests
         working-directory: backend
         run: |
           mkdir -p test-results
           npm run test:e2e -- --runInBand --ci --json --outputFile=test-results/jest-results.json
 
       - name: Upload backend test results
-        if: always()
         uses: actions/upload-artifact@v4
+        if: always()
         with:
           name: backend-test-results
           path: backend/test-results/jest-results.json
 
+      # Mobile cache
       - name: Restore mobile cache
         uses: actions/cache@v4
         with:
           path: mobile/node_modules
-          key: Linux-mobile-${{ hashFiles('mobile/package-lock.json') }}
-          restore-keys: Linux-mobile-
+          key: mobile-${{ hashFiles('mobile/package-lock.json') }}
+          restore-keys: mobile-
 
       - name: Install mobile dependencies
         working-directory: mobile
@@ -68,49 +69,74 @@ jobs:
       - name: Install EAS CLI
         run: npm install -g eas-cli
 
-      - name: Debug EAS token presence
+      - name: Debug EAS Token
+        env:
+          EAS_TOKEN: ${{ secrets.EAS_TOKEN }}
         run: |
           if [ -n "$EAS_TOKEN" ]; then
-            echo "EAS_TOKEN is present.";
+            echo "EAS_TOKEN is set."
           else
-            echo "EAS_TOKEN is NOT present — skipping EAS build.";
+            echo "EAS_TOKEN is NOT set."
           fi
-          npx eas whoami || echo "Not logged in to EAS CLI"
 
-      - name: Skip EAS build if no token
-        if: ${{ env.EAS_TOKEN == '' }}
-        run: echo "Skipping Expo build because EAS_TOKEN is missing."
+      - name: Skip Expo build (no token)
+        if: ${{ secrets.EAS_TOKEN == '' }}
+        run: echo "Skipping Expo build because EAS_TOKEN is not set."
 
-      - name: Build Expo preview (Android)
-        if: ${{ env.EAS_TOKEN != '' }}
+      - name: Build Expo Android (only when token exists)
+        if: ${{ secrets.EAS_TOKEN != '' }}
         working-directory: mobile
         env:
-          EAS_TOKEN: ${{ env.EAS_TOKEN }}
+          EAS_TOKEN: ${{ secrets.EAS_TOKEN }}
         run: |
           mkdir -p ../artifacts
           eas build --profile preview --platform android --non-interactive --json > ../artifacts/eas-build-result.json
 
-      - name: Upload Expo build info
-        if: ${{ env.EAS_TOKEN != '' }}
+      - name: Upload Expo build result
+        if: ${{ secrets.EAS_TOKEN != '' }}
         uses: actions/upload-artifact@v4
         with:
           name: expo-build-preview
           path: artifacts/eas-build-result.json
 
+      # Swagger docs
       - name: Generate Swagger documentation
         run: |
           cd backend
           mkdir -p ../artifacts
           node - <<'NODE'
+          import { mkdirSync, writeFileSync } from 'fs';
+          import { Test } from '@nestjs/testing';
+          import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
+          import { AppModule } from './src/app.module.js';
+          import { PrismaService } from './src/prisma/prisma.service.js';
+          const prismaMock = new Proxy(
+            { $connect: async()=>{}, $disconnect:async()=>{}, $on:()=>{}, enableShutdownHooks:async()=>{} },
+            { get:(t,p)=>p in t?t[p]:async()=>undefined }
+          );
+          const generate = async()=>{
+            const moduleRef=await Test.createTestingModule({imports:[AppModule]})
+              .overrideProvider(PrismaService).useValue(prismaMock).compile();
+            const app=moduleRef.createNestApplication(); await app.init();
+            const config=new DocumentBuilder().setTitle('HandyConnect API')
+              .setDescription('API documentation for HandyConnect')
+              .setVersion('1.0').addBearerAuth().build();
+            const document=SwaggerModule.createDocument(app,config);
+            mkdirSync('../artifacts',{recursive:true});
+            writeFileSync('../artifacts/swagger.json',JSON.stringify(document,null,2));
+            await app.close();
+          };
+          generate().catch(e=>{console.error(e);process.exit(1);});
           NODE
 
-      - name: Upload Swagger documentation artifact
-        if: always()
+      - name: Upload Swagger documentation
         uses: actions/upload-artifact@v4
+        if: always()
         with:
           name: swagger-documentation
           path: artifacts/swagger.json
 
+      # Render deploy
       - name: Deploy to Render
         if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/staging'
         env:
@@ -121,18 +147,3 @@ jobs:
             -H "Authorization: Bearer $RENDER_API_KEY" \
             -H "Content-Type: application/json" \
             -d '{"clearCache":false}'
-
-      - name: Run database seed
-        working-directory: backend
-        env:
-          DATABASE_URL: ${{ github.ref == 'refs/heads/main' && secrets.PRODUCTION_DATABASE_URL || secrets.STAGING_DATABASE_URL }}
-        run: npm run seed
-
-      - name: Upload Swagger docs to S3
-        env:
-          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          AWS_DEFAULT_REGION: ${{ secrets.AWS_DEFAULT_REGION }}
-          SWAGGER_BUCKET_NAME: ${{ secrets.SWAGGER_BUCKET_NAME }}
-        run: |
-          aws s3 cp artifacts/swagger.json s3://$SWAGGER_BUCKET_NAME/${{ github.ref_name }}-swagger.json --cache-control max-age=300

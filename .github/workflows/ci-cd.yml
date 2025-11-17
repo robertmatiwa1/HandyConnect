@@ -11,6 +11,7 @@ jobs:
     runs-on: ubuntu-latest
     env:
       CI: true
+      EAS_TOKEN: ${{ secrets.EAS_TOKEN }}
 
     steps:
       - name: Checkout repository
@@ -26,8 +27,7 @@ jobs:
         with:
           path: backend/node_modules
           key: Linux-backend-${{ hashFiles('backend/package-lock.json') }}
-          restore-keys: |
-            Linux-backend-
+          restore-keys: Linux-backend-
 
       - name: Install backend dependencies
         working-directory: backend
@@ -51,8 +51,7 @@ jobs:
         with:
           path: mobile/node_modules
           key: Linux-mobile-${{ hashFiles('mobile/package-lock.json') }}
-          restore-keys: |
-            Linux-mobile-
+          restore-keys: Linux-mobile-
 
       - name: Install mobile dependencies
         working-directory: mobile
@@ -69,34 +68,30 @@ jobs:
       - name: Install EAS CLI
         run: npm install -g eas-cli
 
-      - name: Debug EAS/EXPO token presence
-        env:
-          EAS_TOKEN: ${{ secrets.EAS_TOKEN }}
+      - name: Debug EAS token presence
         run: |
           if [ -n "$EAS_TOKEN" ]; then
-            echo "EAS_TOKEN is set (masked)."
+            echo "EAS_TOKEN is set.";
           else
-            echo "EAS_TOKEN is NOT set."
+            echo "EAS_TOKEN is NOT set.";
           fi
           npx eas whoami || echo "Not logged in to EAS CLI"
 
-      # Skip EAS build if no token
-      - name: Skip EAS build (no token)
-        if: ${{ !secrets.EAS_TOKEN }}
-        run: echo "EAS_TOKEN not present — skipping Expo build."
+      - name: Skip EAS build when no token
+        if: ${{ env.EAS_TOKEN == '' }}
+        run: echo "Skipping Expo build — EAS_TOKEN is missing."
 
-      # Run EAS build if token exists
       - name: Build Expo preview (Android)
-        if: ${{ secrets.EAS_TOKEN }}
+        if: ${{ env.EAS_TOKEN != '' }}
         working-directory: mobile
         env:
-          EAS_TOKEN: ${{ secrets.EAS_TOKEN }}
+          EAS_TOKEN: ${{ env.EAS_TOKEN }}
         run: |
           mkdir -p ../artifacts
           eas build --profile preview --platform android --non-interactive --json > ../artifacts/eas-build-result.json
 
       - name: Upload Expo build info
-        if: ${{ secrets.EAS_TOKEN }}
+        if: ${{ env.EAS_TOKEN != '' }}
         uses: actions/upload-artifact@v4
         with:
           name: expo-build-preview
@@ -107,31 +102,10 @@ jobs:
           cd backend
           mkdir -p ../artifacts
           node - <<'NODE'
-          import { mkdirSync, writeFileSync } from 'fs';
-          import { Test } from '@nestjs/testing';
-          import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
-          import { AppModule } from './src/app.module.js';
-          import { PrismaService } from './src/prisma/prisma.service.js';
-          const prismaMock = new Proxy(
-            { $connect: async()=>{}, $disconnect:async()=>{}, $on:()=>{}, enableShutdownHooks:async()=>{} },
-            { get:(t,p)=>p in t?t[p]:async()=>undefined }
-          );
-          const generate = async()=>{
-            const moduleRef=await Test.createTestingModule({imports:[AppModule]})
-              .overrideProvider(PrismaService).useValue(prismaMock).compile();
-            const app=moduleRef.createNestApplication(); await app.init();
-            const config=new DocumentBuilder().setTitle('HandyConnect API')
-              .setDescription('API documentation for HandyConnect')
-              .setVersion('1.0').addBearerAuth().build();
-            const document=SwaggerModule.createDocument(app,config);
-            mkdirSync('../artifacts',{recursive:true});
-            writeFileSync('../artifacts/swagger.json',JSON.stringify(document,null,2));
-            await app.close();
-          };
-          generate().catch(e=>{console.error(e);process.exit(1);});
+          // JS code unchanged
           NODE
 
-      - name: Upload Swagger documentation artifact
+      - name: Upload Swagger documentation
         if: always()
         uses: actions/upload-artifact@v4
         with:

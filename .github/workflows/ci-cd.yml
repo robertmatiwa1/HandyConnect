@@ -14,14 +14,17 @@ jobs:
       EAS_TOKEN: ${{ secrets.EAS_TOKEN }}
 
     steps:
+      # 1. Checkout
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      # 2. Node
       - name: Setup Node.js 18
         uses: actions/setup-node@v4
         with:
           node-version: 18
 
+      # Backend
       - name: Restore backend cache
         uses: actions/cache@v4
         with:
@@ -46,6 +49,7 @@ jobs:
           name: backend-test-results
           path: backend/test-results/jest-results.json
 
+      # Mobile
       - name: Restore mobile cache
         uses: actions/cache@v4
         with:
@@ -68,18 +72,20 @@ jobs:
       - name: Install EAS CLI
         run: npm install -g eas-cli
 
-      - name: Debug EAS token presence
+      - name: Debug Expo Token
         run: |
+          echo "Checking EAS_TOKEN..."
           if [ -n "$EAS_TOKEN" ]; then
-            echo "EAS_TOKEN is set.";
+            echo "EAS_TOKEN is SET";
           else
-            echo "EAS_TOKEN is NOT set.";
+            echo "EAS_TOKEN is NOT set";
           fi
-          npx eas whoami || echo "Not logged in to EAS CLI"
+          npx eas whoami || echo "Not logged in"
 
-      - name: Skip EAS build when no token
+      # Only run Expo build if EAS_TOKEN is available
+      - name: Skip Expo build when token missing
         if: ${{ env.EAS_TOKEN == '' }}
-        run: echo "Skipping Expo build — EAS_TOKEN is missing."
+        run: echo "Skipping Expo build because EAS_TOKEN is missing."
 
       - name: Build Expo preview (Android)
         if: ${{ env.EAS_TOKEN != '' }}
@@ -97,21 +103,54 @@ jobs:
           name: expo-build-preview
           path: artifacts/eas-build-result.json
 
+      # Swagger
       - name: Generate Swagger documentation
         run: |
           cd backend
           mkdir -p ../artifacts
           node - <<'NODE'
-          // JS code unchanged
+          import { mkdirSync, writeFileSync } from 'fs';
+          import { Test } from '@nestjs/testing';
+          import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
+          import { AppModule } from './src/app.module.js';
+          import { PrismaService } from './src/prisma/prisma.service.js';
+
+          const prismaMock = new Proxy(
+            { $connect: async()=>{}, $disconnect: async()=>{}, $on:()=>{}, enableShutdownHooks: async()=>{} },
+            { get:(t,p)=>p in t?t[p]:async()=>undefined }
+          );
+
+          async function generate() {
+            const moduleRef = await Test.createTestingModule({ imports:[AppModule] })
+              .overrideProvider(PrismaService).useValue(prismaMock).compile();
+
+            const app = moduleRef.createNestApplication();
+            await app.init();
+
+            const config = new DocumentBuilder()
+              .setTitle('HandyConnect API')
+              .setDescription('API documentation for HandyConnect')
+              .setVersion('1.0')
+              .addBearerAuth()
+              .build();
+
+            const document = SwaggerModule.createDocument(app, config);
+            mkdirSync('../artifacts', { recursive: true });
+            writeFileSync('../artifacts/swagger.json', JSON.stringify(document, null, 2));
+
+            await app.close();
+          }
+
+          generate().catch(e => { console.error(e); process.exit(1); });
           NODE
 
       - name: Upload Swagger documentation
-        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: swagger-documentation
           path: artifacts/swagger.json
 
+      # Deploy to Render
       - name: Deploy to Render
         if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/staging'
         env:
@@ -123,12 +162,14 @@ jobs:
             -H "Content-Type: application/json" \
             -d '{"clearCache":false}'
 
+      # Seed DB
       - name: Run database seed
         working-directory: backend
         env:
           DATABASE_URL: ${{ github.ref == 'refs/heads/main' && secrets.PRODUCTION_DATABASE_URL || secrets.STAGING_DATABASE_URL }}
         run: npm run seed
 
+      # Upload API documentation to S3
       - name: Upload Swagger docs to S3
         env:
           AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}

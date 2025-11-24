@@ -2,9 +2,9 @@ name: HandyConnect CI/CD
 
 on:
   push:
-    branches: [main, staging]
+    branches: [ main, staging ]
   pull_request:
-    branches: [main, staging]
+    branches: [ main, staging ]
 
 jobs:
   build-test-deploy:
@@ -13,18 +13,14 @@ jobs:
       CI: true
 
     steps:
-
-      # 1. Checkout repository
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # 2. Setup Node.js
       - name: Setup Node.js 18
         uses: actions/setup-node@v4
         with:
           node-version: 18
 
-      # 3. Backend cache restore
       - name: Restore backend cache
         uses: actions/cache@v4
         with:
@@ -32,12 +28,10 @@ jobs:
           key: backend-${{ hashFiles('backend/package-lock.json') }}
           restore-keys: backend-
 
-      # 4. Backend install
       - name: Install backend dependencies
         working-directory: backend
         run: npm ci
 
-      # 5. Backend tests
       - name: Run backend e2e tests
         working-directory: backend
         run: |
@@ -51,7 +45,6 @@ jobs:
           name: backend-test-results
           path: backend/test-results/jest-results.json
 
-      # 6. Mobile cache
       - name: Restore mobile cache
         uses: actions/cache@v4
         with:
@@ -59,43 +52,35 @@ jobs:
           key: mobile-${{ hashFiles('mobile/package-lock.json') }}
           restore-keys: mobile-
 
-      # 7. Install mobile dependencies
       - name: Install mobile dependencies
         working-directory: mobile
         run: npm ci
 
-      # 8. Ensure Expo assets
       - name: Ensure Expo assets
         working-directory: mobile
         run: npm run ensure:assets
 
-      # 9. Run Expo doctor
       - name: Run Expo doctor
         working-directory: mobile
         run: npx expo-doctor
 
-      # 10. Install EAS CLI
       - name: Install EAS CLI
         run: npm install -g eas-cli
 
-      # 11. Debug presence of secrets
-      - name: Debug EAS Token
-        env:
-          EAS_TOKEN: ${{ secrets.EAS_TOKEN }}
+      - name: Check if EAS_TOKEN exists
         run: |
-          if [ -n "$EAS_TOKEN" ]; then
-            echo "EAS_TOKEN is set."
+          if [ -z "${{ secrets.EAS_TOKEN }}" ]; then
+            echo "EAS_TOKEN is NOT set — Expo build will be skipped."
           else
-            echo "EAS_TOKEN is NOT set."
+            echo "EAS_TOKEN is set."
           fi
-          npx eas whoami || echo "Not logged in."
 
-      # 12. Skip Expo build if no token
-      - name: Skip Expo build (no EAS token)
-        if: ${{ ! secrets.EAS_TOKEN }}
+      # ✅ VALID SYNTAX — skip step when token missing
+      - name: Skip Expo build (missing token)
+        if: ${{ !secrets.EAS_TOKEN }}
         run: echo "Skipping Expo build because EAS_TOKEN is missing."
 
-      # 13. Build Expo Android (ONLY when token exists)
+      # ✅ VALID SYNTAX — run only when token exists
       - name: Build Expo Android
         if: ${{ secrets.EAS_TOKEN }}
         working-directory: mobile

@@ -11,9 +11,9 @@ jobs:
     runs-on: ubuntu-latest
     env:
       CI: true
-      HAS_TOKEN: ${{ secrets.EAS_TOKEN != '' }}
 
     steps:
+
       - name: Checkout repository
         uses: actions/checkout@v4
 
@@ -73,17 +73,19 @@ jobs:
           EAS_TOKEN: ${{ secrets.EAS_TOKEN }}
         run: |
           if [ -n "$EAS_TOKEN" ]; then
-            echo "EAS_TOKEN is set."
+            echo "EAS_TOKEN is set.";
           else
-            echo "EAS_TOKEN is NOT set."
+            echo "EAS_TOKEN is NOT set.";
           fi
 
+      # IF NO TOKEN → SKIP
       - name: Skip Expo build (no token)
-        if: ${{ env.HAS_TOKEN == 'false' }}
+        if: ${{ secrets.EAS_TOKEN == '' }}
         run: echo "Skipping Expo build because EAS_TOKEN is missing."
 
+      # IF TOKEN → BUILD
       - name: Build Expo Android
-        if: ${{ env.HAS_TOKEN == 'true' }}
+        if: ${{ secrets.EAS_TOKEN != '' }}
         working-directory: mobile
         env:
           EAS_TOKEN: ${{ secrets.EAS_TOKEN }}
@@ -92,7 +94,7 @@ jobs:
           eas build --profile preview --platform android --non-interactive --json > ../artifacts/eas-build-result.json
 
       - name: Upload Expo build result
-        if: ${{ env.HAS_TOKEN == 'true' }}
+        if: ${{ secrets.EAS_TOKEN != '' }}
         uses: actions/upload-artifact@v4
         with:
           name: expo-build-preview

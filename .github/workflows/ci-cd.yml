@@ -67,34 +67,34 @@ jobs:
       - name: Install EAS CLI
         run: npm install -g eas-cli
 
-      # ---- TOKEN DEBUG ----
-      - name: Debug EAS Token
-        env:
-          EAS_TOKEN: ${{ secrets.EAS_TOKEN }}
+      # Export secret to env, since secrets.* CANNOT be used in IF
+      - name: Export EAS_TOKEN into env
+        run: echo "EAS_TOKEN=${{ secrets.EAS_TOKEN }}" >> $GITHUB_ENV
+
+      - name: Debug EAS token presence
         run: |
-          if [ -n "$EAS_TOKEN" ]; then
-            echo "EAS_TOKEN is set."
-          else
+          if [ -z "$EAS_TOKEN" ]; then
             echo "EAS_TOKEN is NOT set."
+          else
+            echo "EAS_TOKEN is present."
           fi
 
-      # ---- SKIP IF NO TOKEN ----
+      # Correct condition — uses env.EAS_TOKEN instead of secrets
       - name: Skip Expo build (no token)
-        if: secrets.EAS_TOKEN == ''
+        if: ${{ env.EAS_TOKEN == '' }}
         run: echo "Skipping Expo build because EAS_TOKEN is missing."
 
-      # ---- RUN BUILD IF TOKEN PRESENT ----
       - name: Build Expo Android
-        if: secrets.EAS_TOKEN != ''
+        if: ${{ env.EAS_TOKEN != '' }}
         working-directory: mobile
         env:
-          EAS_TOKEN: ${{ secrets.EAS_TOKEN }}
+          EAS_TOKEN: ${{ env.EAS_TOKEN }}
         run: |
           mkdir -p ../artifacts
           eas build --profile preview --platform android --non-interactive --json > ../artifacts/eas-build-result.json
 
       - name: Upload Expo build result
-        if: secrets.EAS_TOKEN != ''
+        if: ${{ env.EAS_TOKEN != '' }}
         uses: actions/upload-artifact@v4
         with:
           name: expo-build-preview

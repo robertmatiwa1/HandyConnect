@@ -107,46 +107,48 @@ model Review {
 }
 
 model Payment {
-  id                  String         @id @default(uuid())
-  jobId               String         @unique
+  id                  String        @id @default(uuid())
+  jobId               String        @unique
   amountCents         Int
   commissionCents     Int
   providerPayoutCents Int
-  status              PaymentStatus  @default(PENDING)
+  status              PaymentStatus @default(PENDING)
   checkoutUrl         String
   externalReference   String?
-  createdAt           DateTime       @default(now())
-  updatedAt           DateTime       @updatedAt
+  createdAt           DateTime      @default(now())
+  updatedAt           DateTime      @updatedAt
 
-  job       Job        @relation(fields: [jobId], references: [id], onDelete: Cascade)
-  disputes  Dispute[]
-  refunds   Refund[]
+  job      Job       @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  disputes Dispute[]
+  refunds  Refund[]
 }
 
 model Dispute {
-  id           String        @id @default(uuid())
-  paymentId    String
-  reason       String
-  status       DisputeStatus @default(OPEN)
-  amountCents  Int
-  submittedAt  DateTime      @default(now())
-  resolvedAt   DateTime?
-  createdAt    DateTime      @default(now())
-  updatedAt    DateTime      @updatedAt
+  id          String        @id @default(uuid())
+  paymentId   String
+  reason      String
+  status      DisputeStatus @default(OPEN)
+  amountCents Int
+  submittedAt DateTime      @default(now())
+  resolvedAt  DateTime?
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
 
   payment Payment @relation(fields: [paymentId], references: [id], onDelete: Cascade)
 }
 
 model Refund {
-  id           String        @id @default(uuid())
-  jobId        String
-  amountCents  Int
-  status       RefundStatus  @default(PENDING_REVIEW)
-  reason       String?
-  requestedAt  DateTime      @default(now())
-  processedAt  DateTime?
-  createdAt    DateTime      @default(now())
-  updatedAt    DateTime      @updatedAt
+  id          String       @id @default(uuid())
+  jobId       String
+  paymentId   String
+  amountCents Int
+  status      RefundStatus @default(PENDING_REVIEW)
+  reason      String?
+  requestedAt DateTime     @default(now())
+  processedAt DateTime?
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
 
-  job Job @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  job     Job     @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  payment Payment @relation(fields: [paymentId], references: [id], onDelete: Cascade)
 }

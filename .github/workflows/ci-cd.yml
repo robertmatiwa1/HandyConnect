@@ -80,12 +80,12 @@ jobs:
 
       # IF NO TOKEN → SKIP
       - name: Skip Expo build (no token)
-        if: secrets.EAS_TOKEN == ''
+        if: ${{ secrets.EAS_TOKEN == '' }}
         run: echo "Skipping Expo build because EAS_TOKEN is missing."
 
       # IF TOKEN → BUILD
       - name: Build Expo Android
-        if: secrets.EAS_TOKEN != ''
+        if: ${{ secrets.EAS_TOKEN != '' }}
         working-directory: mobile
         env:
           EAS_TOKEN: ${{ secrets.EAS_TOKEN }}
@@ -94,7 +94,7 @@ jobs:
           eas build --profile preview --platform android --non-interactive --json > ../artifacts/eas-build-result.json
 
       - name: Upload Expo build result
-        if: secrets.EAS_TOKEN != ''
+        if: ${{ secrets.EAS_TOKEN != '' }}
         uses: actions/upload-artifact@v4
         with:
           name: expo-build-preview

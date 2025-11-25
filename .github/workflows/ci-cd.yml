@@ -73,14 +73,19 @@ jobs:
             echo "EXPO_TOKEN is NOT set.";
           fi
 
-      # Build Expo Android if token is available
-      - name: Build Expo Android
+      # Initialize and build Expo Android if token is available
+      - name: Setup and Build Expo Android
         working-directory: mobile
         env:
           EXPO_TOKEN: ${{ secrets.EAS_TOKEN }}
         run: |
           if [ -n "$EXPO_TOKEN" ]; then
+            echo "Setting up EAS project..."
+            # Initialize EAS project non-interactively
+            npx eas init --non-interactive --id handyconnect || echo "EAS project already exists or initialization failed"
+            
             mkdir -p ../artifacts
+            echo "Starting Expo build..."
             eas build --profile preview --platform android --non-interactive --json > ../artifacts/eas-build-result.json
           else
             echo "Skipping Expo build because EXPO_TOKEN is missing."

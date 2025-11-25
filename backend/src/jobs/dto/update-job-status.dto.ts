@@ -1,5 +1,7 @@
-import { JobStatus } from '../job-status.enum';
+import { JobStatus } from '@prisma/client';
+import { IsEnum } from 'class-validator';
 
 export class UpdateJobStatusDto {
-  status!: JobStatus;
+  @IsEnum(JobStatus)
+  status: JobStatus;
 }

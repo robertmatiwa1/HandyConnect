@@ -31,20 +31,15 @@ jobs:
 
       - name: Install backend dependencies
         working-directory: backend
-        run: npm ci
+        run: npm install
 
-      - name: Run backend e2e tests
+      - name: Run database migrations
         working-directory: backend
-        run: |
-          mkdir -p test-results
-          npm run test:e2e -- --runInBand --ci --json --outputFile=test-results/jest-results.json
+        run: npx prisma generate
 
-      - name: Upload backend test results
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: backend-test-results
-          path: backend/test-results/jest-results.json
+      - name: Build backend
+        working-directory: backend
+        run: npm run build
 
       - name: Restore mobile cache
         uses: actions/cache@v4

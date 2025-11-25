@@ -65,30 +65,30 @@ jobs:
 
       - name: Debug EAS Token
         env:
-          EAS_TOKEN: ${{ secrets.EAS_TOKEN }}
+          EXPO_TOKEN: ${{ secrets.EAS_TOKEN }}
         run: |
-          if [ -n "$EAS_TOKEN" ]; then
-            echo "EAS_TOKEN is set.";
+          if [ -n "$EXPO_TOKEN" ]; then
+            echo "EXPO_TOKEN is set.";
           else
-            echo "EAS_TOKEN is NOT set.";
+            echo "EXPO_TOKEN is NOT set.";
           fi
 
-      # Simplified approach - always try to build but continue on failure
+      # Build Expo Android if token is available
       - name: Build Expo Android
         working-directory: mobile
         env:
-          EAS_TOKEN: ${{ secrets.EAS_TOKEN }}
+          EXPO_TOKEN: ${{ secrets.EAS_TOKEN }}
         run: |
-          if [ -n "$EAS_TOKEN" ]; then
+          if [ -n "$EXPO_TOKEN" ]; then
             mkdir -p ../artifacts
             eas build --profile preview --platform android --non-interactive --json > ../artifacts/eas-build-result.json
           else
-            echo "Skipping Expo build because EAS_TOKEN is missing."
+            echo "Skipping Expo build because EXPO_TOKEN is missing."
           fi
 
       - name: Upload Expo build result
         uses: actions/upload-artifact@v4
         with:
-          name: ex-po-build-preview
+          name: expo-build-preview
           path: artifacts/eas-build-result.json
         if: always()

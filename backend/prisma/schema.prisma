@@ -1,154 +1,69 @@
-generator client {
-  provider = "prisma-client-js"
-}
-
-datasource db {
-  provider = "postgresql"
-  url      = env("DATABASE_URL")
-}
-
-enum Role {
-  CUSTOMER
-  PROVIDER
-  ADMIN
-}
-
-enum JobStatus {
-  PENDING
-  ACCEPTED
-  IN_PROGRESS
-  COMPLETED
-  CANCELLED
-}
-
-enum PaymentStatus {
-  PENDING
-  ESCROW
-  PAID
-}
-
-enum DisputeStatus {
-  OPEN
-  AWAITING_MERCHANT_EVIDENCE
-  CHARGEBACK_FILED
-  WON
-  LOST
-}
-
-enum RefundStatus {
-  PENDING_REVIEW
-  APPROVED
-  REJECTED
-}
+generator client { provider = "prisma-client-js" }
+datasource db { provider = "postgresql"; url = env("DATABASE_URL") }
 
 model User {
-  id                    String           @id @default(uuid())
-  email                 String           @unique
-  password              String
-  name                  String
-  role                  Role
-  emailVerificationCode String?          @unique
-  createdAt             DateTime         @default(now())
-  updatedAt             DateTime         @updatedAt
-  providerProfile       ProviderProfile?
-  customerJobs          Job[]            @relation("CustomerJobs")
-  customerReviews       Review[]         @relation("CustomerReviews")
+  id             String           @id @default(cuid())
+  name           String
+  email          String           @unique
+  phone          String?
+  password       String
+  role           Role             @default(CUSTOMER)
+  verified       Boolean          @default(false)
+  createdAt      DateTime         @default(now())
+  provider       ProviderProfile?
+  jobsAsCustomer Job[]            @relation("JobsAsCustomer")
+  jobsAsProvider Job[]            @relation("JobsAsProvider")
 }
 
 model ProviderProfile {
-  id              String   @id @default(uuid())
+  id              String   @id @default(cuid())
   userId          String   @unique
   user            User     @relation(fields: [userId], references: [id])
-  skill           String
+  skillCategory   String
+  hourlyRate      Int
   suburb          String
-  hourlyRate      Int?
-  bio             String?
-  experienceYears Int?
-  verified        Boolean  @default(false)
-  photoUrl        String?
-  portfolio       String[] @default([])
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
-  reviews         Review[]
-  jobs            Job[]
+  certifications  String[]
+  portfolioUrls   String[]
+  rating          Float    @default(0)
+  ratingsCount    Int      @default(0)
 }
 
 model Job {
-  id                String    @id @default(uuid())
-  customerId        String
-  providerProfileId String
-  title             String
-  notes             String?
-  scheduledAt       DateTime
-  suburb            String
-  priceCents        Int
-  status            JobStatus @default(PENDING)
-  createdAt         DateTime  @default(now())
-  updatedAt         DateTime  @updatedAt
-
-  customer User            @relation("CustomerJobs", fields: [customerId], references: [id])
-  provider ProviderProfile @relation(fields: [providerProfileId], references: [id])
-  review   Review?
-  payment  Payment?
-  refunds  Refund[]
-}
-
-model Review {
-  id         String          @id @default(uuid())
-  jobId      String          @unique
-  providerId String
-  provider   ProviderProfile @relation(fields: [providerId], references: [id], onDelete: Cascade)
-  customerId String
-  customer   User            @relation("CustomerReviews", fields: [customerId], references: [id])
-  job        Job             @relation(fields: [jobId], references: [id], onDelete: Cascade)
-  rating     Int
-  comment    String?
-  createdAt  DateTime        @default(now())
+  id          String      @id @default(cuid())
+  customerId  String
+  providerId  String?
+  customer    User        @relation("JobsAsCustomer", fields: [customerId], references: [id])
+  provider    User?       @relation("JobsAsProvider", fields: [providerId], references: [id])
+  status      JobStatus   @default(REQUESTED)
+  description String
+  suburb      String
+  scheduledAt DateTime
+  priceCents  Int
+  createdAt   DateTime    @default(now())
+  payment     Payment?
+  review      Review?
 }
 
 model Payment {
-  id                  String        @id @default(uuid())
-  jobId               String        @unique
+  id                  String         @id @default(cuid())
+  jobId               String         @unique
+  job                 Job            @relation(fields: [jobId], references: [id])
   amountCents         Int
+  status              PaymentStatus  @default(PENDING)
+  method              String
   commissionCents     Int
   providerPayoutCents Int
-  status              PaymentStatus @default(PENDING)
-  checkoutUrl         String
-  externalReference   String?
-  createdAt           DateTime      @default(now())
-  updatedAt           DateTime      @updatedAt
-
-  job      Job       @relation(fields: [jobId], references: [id], onDelete: Cascade)
-  disputes Dispute[]
-  refunds  Refund[]
 }
 
-model Dispute {
-  id          String        @id @default(uuid())
-  paymentId   String
-  reason      String
-  status      DisputeStatus @default(OPEN)
-  amountCents Int
-  submittedAt DateTime      @default(now())
-  resolvedAt  DateTime?
-  createdAt   DateTime      @default(now())
-  updatedAt   DateTime      @updatedAt
-
-  payment Payment @relation(fields: [paymentId], references: [id], onDelete: Cascade)
+model Review {
+  id        String   @id @default(cuid())
+  jobId     String   @unique
+  job       Job      @relation(fields: [jobId], references: [id])
+  rating    Int
+  comment   String?
+  createdAt DateTime @default(now())
 }
 
-model Refund {
-  id          String       @id @default(uuid())
-  jobId       String
-  paymentId   String
-  amountCents Int
-  status      RefundStatus @default(PENDING_REVIEW)
-  reason      String?
-  requestedAt DateTime     @default(now())
-  processedAt DateTime?
-  createdAt   DateTime     @default(now())
-  updatedAt   DateTime     @updatedAt
-
-  job     Job     @relation(fields: [jobId], references: [id], onDelete: Cascade)
-  payment Payment @relation(fields: [paymentId], references: [id], onDelete: Cascade)
-}
+enum Role { CUSTOMER PROVIDER ADMIN }
+enum JobStatus { REQUESTED ACCEPTED IN_PROGRESS COMPLETED CANCELLED }
+enum PaymentStatus { PENDING ESCROW PAID REFUNDED }

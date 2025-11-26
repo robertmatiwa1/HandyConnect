@@ -1,8 +1,22 @@
-FROM node:20-alpine
+FROM node:20-slim
+
 WORKDIR /app
-COPY package.json package-lock.json* pnpm-lock.yaml* yarn.lock* ./
-RUN npm install --legacy-peer-deps || yarn install || pnpm install
+
+# Install required OS libs for Prisma
+RUN apt-get update && apt-get install -y openssl
+
+COPY package.json package-lock.json* ./
+
+RUN npm install --legacy-peer-deps
+
 COPY . .
-RUN npm run prisma:gen
-RUN npm run build || echo "Skipping build for starter"
-CMD ["npm", "run", "start:dev"]
+
+# Generate Prisma client with correct binary
+RUN npx prisma generate
+
+# Build NestJS
+RUN npm run build
+
+EXPOSE 3000
+
+CMD ["node", "dist/main.js"]

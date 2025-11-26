@@ -6,7 +6,8 @@
     "start:dev": "nest start --watch",
     "prisma:dev": "prisma migrate dev",
     "prisma:gen": "prisma generate",
-    "seed": "ts-node prisma/seed.ts"
+    "seed": "ts-node prisma/seed.ts",
+    "build": "prisma generate && nest build"
   },
   "dependencies": {
     "@nestjs/common": "^10.0.0",
@@ -14,6 +15,7 @@
     "@nestjs/jwt": "^10.0.0",
     "@nestjs/passport": "^10.0.0",
     "@nestjs/platform-express": "^10.0.0",
+    "@nestjs/swagger": "^7.4.2",
     "@prisma/client": "^5.0.0",
     "argon2": "^0.31.0",
     "class-transformer": "^0.5.1",
@@ -22,12 +24,14 @@
     "passport-jwt": "^4.0.1",
     "pg": "^8.11.0",
     "reflect-metadata": "^0.1.13",
-    "rxjs": "^7.8.1"
+    "rxjs": "^7.8.1",
+    "swagger-ui-express": "^5.0.1"
   },
   "devDependencies": {
     "@nestjs/cli": "^10.0.0",
     "@nestjs/schematics": "^10.0.0",
     "@nestjs/testing": "^10.0.0",
+    "@types/passport-jwt": "^4.0.1",
     "prisma": "^5.0.0",
     "ts-node": "^10.9.2",
     "typescript": "^5.4.0"

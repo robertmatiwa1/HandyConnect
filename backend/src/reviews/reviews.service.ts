@@ -41,7 +41,7 @@ export class ReviewsService {
           });
 
       const providerProfile = await tx.providerProfile.findUnique({
-        where: { userId: job.providerId },
+        where: { userId: job.providerId ?? undefined },
       });
 
       if (providerProfile) {

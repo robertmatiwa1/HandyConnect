@@ -1,5 +1,14 @@
 import React, { useState } from 'react';
-import { Alert, KeyboardAvoidingView, Platform, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
+import {
+  Alert,
+  KeyboardAvoidingView,
+  Platform,
+  StyleSheet,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  View
+} from 'react-native';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 
 import { login } from '../api/auth';
@@ -47,6 +56,7 @@ const LoginScreen: React.FC<Props> = ({ navigation }) => {
       <View style={styles.card}>
         <Text style={styles.title}>Sign in to HandyConnect</Text>
         <Text style={styles.subtitle}>Use your marketplace credentials to manage bookings and jobs.</Text>
+
         <View style={styles.field}>
           <Text style={styles.label}>Email</Text>
           <TextInput
@@ -59,6 +69,7 @@ const LoginScreen: React.FC<Props> = ({ navigation }) => {
             style={styles.input}
           />
         </View>
+
         <View style={styles.field}>
           <Text style={styles.label}>Password</Text>
           <TextInput
@@ -69,10 +80,28 @@ const LoginScreen: React.FC<Props> = ({ navigation }) => {
             style={styles.input}
           />
         </View>
-        <TouchableOpacity style={[styles.button, isSubmitting && styles.buttonDisabled]} onPress={handleLogin} disabled={isSubmitting}>
-          <Text style={styles.buttonText}>{isSubmitting ? 'Signing in…' : 'Sign in'}</Text>
+
+        <TouchableOpacity
+          style={[styles.button, isSubmitting && styles.buttonDisabled]}
+          onPress={handleLogin}
+          disabled={isSubmitting}
+        >
+          <Text style={styles.buttonText}>
+            {isSubmitting ? 'Signing in…' : 'Sign in'}
+          </Text>
         </TouchableOpacity>
-        <Text style={styles.hint}>Demo credentials: {credentialsHint.email} / {credentialsHint.password}</Text>
+
+        <Text style={styles.hint}>
+          Demo credentials: {credentialsHint.email} / {credentialsHint.password}
+        </Text>
+
+        {/* 🔥 Create Account Button */}
+        <TouchableOpacity onPress={() => navigation.navigate('Register')}>
+          <Text style={{ textAlign: 'center', marginTop: 15, color: '#1f6feb' }}>
+            Create an Account
+          </Text>
+        </TouchableOpacity>
+
       </View>
     </KeyboardAvoidingView>
   );

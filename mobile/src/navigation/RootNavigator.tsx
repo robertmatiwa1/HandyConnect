@@ -3,6 +3,7 @@ import { ActivityIndicator, View } from 'react-native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 
 import LoginScreen from '../screens/LoginScreen';
+import RegisterScreen from '../screens/RegisterScreen';
 import HomeScreen from '../screens/HomeScreen';
 import SearchScreen from '../screens/SearchScreen';
 import ProviderProfile from '../screens/ProviderProfile';
@@ -58,7 +59,10 @@ const RootNavigator = () => {
           <Stack.Screen name="Payment" component={PaymentScreen} options={{ title: 'Secure payment' }} />
         </>
       ) : (
-        <Stack.Screen name="Login" component={LoginScreen} options={{ headerShown: false }} />
+        <>
+  <Stack.Screen name="Login" component={LoginScreen} options={{ headerShown: false }} />
+  <Stack.Screen name="Register" component={RegisterScreen} options={{ title: 'Create Account' }} />
+</>
       )}
     </Stack.Navigator>
   );

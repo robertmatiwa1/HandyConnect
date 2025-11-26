@@ -1,18 +1,21 @@
-import { IsInt, IsString } from 'class-validator';
+import { IsInt, IsString, Min } from 'class-validator';
 
 export class CreatePaymentDto {
   @IsString()
-  jobId: string;
+  jobId!: string;
 
   @IsInt()
-  amountCents: number;
+  @Min(0)
+  amountCents!: number;
 
   @IsInt()
-  commissionCents: number;
+  @Min(0)
+  commissionCents!: number;
 
   @IsInt()
-  providerPayoutCents: number;
+  @Min(0)
+  providerPayoutCents!: number;
 
   @IsString()
-  method: string;
+  method!: string;
 }

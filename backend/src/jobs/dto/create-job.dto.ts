@@ -1,23 +1,23 @@
-import { IsDateString, IsInt, IsOptional, IsString, MinLength } from 'class-validator';
+import { IsString, IsOptional, IsDateString, IsInt, Min } from 'class-validator';
 
 export class CreateJobDto {
   @IsString()
-  customerId: string;
+  customerId!: string;
 
   @IsOptional()
   @IsString()
   providerId?: string;
 
   @IsString()
-  @MinLength(5)
-  description: string;
+  description!: string;
 
   @IsString()
-  suburb: string;
+  suburb!: string;
 
   @IsDateString()
-  scheduledAt: string;
+  scheduledAt!: string;
 
   @IsInt()
-  priceCents: number;
+  @Min(0)
+  priceCents!: number;
 }

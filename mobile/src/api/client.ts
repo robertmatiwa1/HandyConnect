@@ -3,7 +3,7 @@ import axios from 'axios';
 import { useAuthStore } from '../store/auth';
 
 export const api = axios.create({
-  baseURL: 'http://10.0.2.2:3000',
+  baseURL: 'https://handyconnect-api-production.up.railway.app',
   timeout: 10000,
 });
 

@@ -13,7 +13,6 @@ import PaymentScreen from '../screens/PaymentScreen';
 import ProviderSettings from '../screens/ProviderSettings';
 import { Provider } from '../components/ProviderCard';
 import { useAuthStore } from '../store/auth';
-import RegisterScreen from '../screens/RegisterScreen';
 import AccountTypeScreen from '../screens/AccountTypeScreen';
 
 export type RootStackParamList = {

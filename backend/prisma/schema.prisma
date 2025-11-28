@@ -70,23 +70,23 @@ model Review {
   createdAt DateTime @default(now())
 }
 
-enum Role { 
-  CUSTOMER 
-  PROVIDER 
-  ADMIN 
+enum Role {
+  CUSTOMER
+  PROVIDER
+  ADMIN
 }
 
-enum JobStatus { 
-  REQUESTED 
-  ACCEPTED 
-  IN_PROGRESS 
-  COMPLETED 
-  CANCELLED 
+enum JobStatus {
+  REQUESTED
+  ACCEPTED
+  IN_PROGRESS
+  COMPLETED
+  CANCELLED
 }
 
-enum PaymentStatus { 
-  PENDING 
-  ESCROW 
-  PAID 
-  REFUNDED 
+enum PaymentStatus {
+  PENDING
+  ESCROW
+  PAID
+  REFUNDED
 }

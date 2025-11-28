@@ -1,18 +1,16 @@
-import { Controller, Get, Param, Query } from '@nestjs/common';
+import { Controller, Post, Body, UseGuards, Req } from '@nestjs/common';
 import { ProvidersService } from './providers.service';
-import { QueryProvidersDto } from './dto/query-providers.dto';
+import { JwtAuthGuard } from '../auth/jjwt.guard';
+import { ProviderProfileDto } from './dto/provider-profile.dto';
 
 @Controller('providers')
 export class ProvidersController {
   constructor(private readonly providersService: ProvidersService) {}
 
-  @Get()
-  findAll(@Query() query: QueryProvidersDto) {
-    return this.providersService.findAll(query);
-  }
-
-  @Get(':id')
-  findOne(@Param('id') id: string) {
-    return this.providersService.findOne(id);
+  @Post('profile')
+  @UseGuards(JwtAuthGuard)
+  async upsertProfile(@Req() req, @Body() body: ProviderProfileDto) {
+    const userId = req.user.userId;
+    return this.providersService.upsertProfile(userId, body);
   }
 }

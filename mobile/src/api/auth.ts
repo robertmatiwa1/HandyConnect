@@ -10,8 +10,23 @@ interface LoginResponse {
   };
 }
 
+interface RegisterPayload {
+  name: string;
+  phone: string;
+  email: string;
+  password: string;
+  role: 'CUSTOMER' | 'PROVIDER';
+}
+
+interface RegisterResponse extends LoginResponse {}
+
 export async function login(email: string, password: string) {
   const { data } = await api.post<LoginResponse>('/auth/login', { email, password });
+  return data;
+}
+
+export async function registerUser(payload: RegisterPayload) {
+  const { data } = await api.post<RegisterResponse>('/auth/register', payload);
   return data;
 }
 

@@ -11,14 +11,19 @@ import BookingScreen from '../screens/BookingScreen';
 import Dashboard from '../screens/Dashboard';
 import PaymentScreen from '../screens/PaymentScreen';
 import ProviderSettings from '../screens/ProviderSettings';
+import AccountTypeScreen from '../screens/AccountTypeScreen';
+import CustomerOnboardingScreen from '../screens/CustomerOnboardingScreen';
+import ProviderOnboardingScreen from '../screens/ProviderOnboardingScreen';
+
 import { Provider } from '../components/ProviderCard';
 import { useAuthStore } from '../store/auth';
-import AccountTypeScreen from '../screens/AccountTypeScreen';
 
 export type RootStackParamList = {
   Login: undefined;
-  Register: undefined;
+  Register: { role: 'CUSTOMER' | 'PROVIDER' } | undefined;
   AccountType: undefined;
+  CustomerOnboarding: undefined;
+  ProviderOnboarding: undefined;
   Home: undefined;
   Search: { skill: string; suburb: string } | undefined;
   ProviderProfile: { provider: Provider };
@@ -35,7 +40,6 @@ const RootNavigator = () => {
   const initialized = useAuthStore((state) => state.initialized);
   const hydrate = useAuthStore((state) => state.hydrate);
 
-  // Run hydration + ensure no invalid token remains
   useEffect(() => {
     if (!initialized) {
       hydrate();
@@ -44,7 +48,6 @@ const RootNavigator = () => {
     }
   }, [initialized, token, hydrate]);
 
-  // while loading storage
   if (!initialized) {
     return (
       <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}>
@@ -56,22 +59,71 @@ const RootNavigator = () => {
   return (
     <Stack.Navigator>
       {!token ? (
-        // UNAUTHENTICATED FLOW
         <>
-          <Stack.Screen name="Login" component={LoginScreen} options={{ headerShown: false }} />
-          <Stack.Screen name="Register" component={RegisterScreen} options={{ title: 'Create Account' }} />
-          <Stack.Screen name="AccountType" component={AccountTypeScreen} options={{ title: 'Account Type' }} />
+          <Stack.Screen
+            name="Login"
+            component={LoginScreen}
+            options={{ headerShown: false }}
+          />
+          <Stack.Screen
+            name="AccountType"
+            component={AccountTypeScreen}
+            options={{ title: 'Choose account type' }}
+          />
+          <Stack.Screen
+            name="Register"
+            component={RegisterScreen}
+            options={{ title: 'Create account' }}
+          />
         </>
       ) : (
-        // AUTHENTICATED FLOW
         <>
-          <Stack.Screen name="Home" component={HomeScreen} options={{ title: 'HandyConnect' }} />
-          <Stack.Screen name="Search" component={SearchScreen} options={{ title: 'Find Providers' }} />
-          <Stack.Screen name="ProviderProfile" component={ProviderProfile} options={{ title: 'Provider' }} />
-          <Stack.Screen name="Booking" component={BookingScreen} options={{ title: 'Book Provider' }} />
-          <Stack.Screen name="Dashboard" component={Dashboard} options={{ title: 'Dashboard' }} />
-          <Stack.Screen name="ProviderSettings" component={ProviderSettings} options={{ title: 'Provider Profile' }} />
-          <Stack.Screen name="Payment" component={PaymentScreen} options={{ title: 'Secure Payment' }} />
+          <Stack.Screen
+            name="CustomerOnboarding"
+            component={CustomerOnboardingScreen}
+            options={{ title: 'Complete your profile' }}
+          />
+          <Stack.Screen
+            name="ProviderOnboarding"
+            component={ProviderOnboardingScreen}
+            options={{ title: 'Set up your provider profile' }}
+          />
+
+          <Stack.Screen
+            name="Home"
+            component={HomeScreen}
+            options={{ title: 'HandyConnect' }}
+          />
+          <Stack.Screen
+            name="Search"
+            component={SearchScreen}
+            options={{ title: 'Find providers' }}
+          />
+          <Stack.Screen
+            name="ProviderProfile"
+            component={ProviderProfile}
+            options={{ title: 'Provider' }}
+          />
+          <Stack.Screen
+            name="Booking"
+            component={BookingScreen}
+            options={{ title: 'Book provider' }}
+          />
+          <Stack.Screen
+            name="Dashboard"
+            component={Dashboard}
+            options={{ title: 'Dashboard' }}
+          />
+          <Stack.Screen
+            name="ProviderSettings"
+            component={ProviderSettings}
+            options={{ title: 'Provider profile' }}
+          />
+          <Stack.Screen
+            name="Payment"
+            component={PaymentScreen}
+            options={{ title: 'Secure payment' }}
+          />
         </>
       )}
     </Stack.Navigator>

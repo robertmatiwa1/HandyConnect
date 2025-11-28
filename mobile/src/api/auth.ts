@@ -1,36 +1,35 @@
 import api from './client';
 
+interface AuthUser {
+  id: string;
+  email: string;
+  name: string;
+  role: 'CUSTOMER' | 'PROVIDER' | 'ADMIN' | string;
+}
+
 interface LoginResponse {
   accessToken: string;
-  user: {
-    id: string;
-    email: string;
-    name: string;
-    role: string;
-  };
+  user: AuthUser;
 }
 
 interface RegisterPayload {
   name: string;
-  phone: string;
   email: string;
   password: string;
   role: 'CUSTOMER' | 'PROVIDER';
 }
-
-interface RegisterResponse extends LoginResponse {}
 
 export async function login(email: string, password: string) {
   const { data } = await api.post<LoginResponse>('/auth/login', { email, password });
   return data;
 }
 
-export async function registerUser(payload: RegisterPayload) {
-  const { data } = await api.post<RegisterResponse>('/auth/register', payload);
+export async function register(payload: RegisterPayload) {
+  const { data } = await api.post<LoginResponse>('/auth/register', payload);
   return data;
 }
 
 export async function fetchProfile() {
-  const { data } = await api.get('/auth/profile');
+  const { data } = await api.get<AuthUser>('/auth/profile');
   return data;
 }

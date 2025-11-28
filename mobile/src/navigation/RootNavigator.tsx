@@ -13,6 +13,8 @@ import PaymentScreen from '../screens/PaymentScreen';
 import ProviderSettings from '../screens/ProviderSettings';
 import { Provider } from '../components/ProviderCard';
 import { useAuthStore } from '../store/auth';
+import RegisterScreen from '../screens/RegisterScreen';
+import AccountTypeScreen from '../screens/AccountTypeScreen';
 
 export type RootStackParamList = {
   Login: undefined;
@@ -57,6 +59,9 @@ const RootNavigator = () => {
           <Stack.Screen name="Dashboard" component={Dashboard} options={{ title: 'Dashboard' }} />
           <Stack.Screen name="ProviderSettings" component={ProviderSettings} options={{ title: 'Provider profile' }} />
           <Stack.Screen name="Payment" component={PaymentScreen} options={{ title: 'Secure payment' }} />
+          <Stack.Screen name="Login" component={LoginScreen} options={{ headerShown: false }} />
+          <Stack.Screen name="Register" component={RegisterScreen} />
+          <Stack.Screen name="AccountType" component={AccountTypeScreen} options={{ title: "Account Type" }} />
         </>
       ) : (
         <>

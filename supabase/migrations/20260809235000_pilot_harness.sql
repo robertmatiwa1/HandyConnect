@@ -29,7 +29,6 @@ declare
   v_rating numeric;
   v_job_status text;
   v_result jsonb;
-  v_status text := 'passed';
   v_step text := 'setup';
 begin
   select id into v_skill_id from public.skills where active=true order by id limit 1;
@@ -117,23 +116,25 @@ begin
   insert into public.pilot_test_runs(status,result) values('passed',v_result);
   return v_result;
 exception when others then
-  v_status := 'failed';
   v_result := jsonb_build_object('ok',false,'failed_step',v_step,'error',sqlerrm);
-  if v_customer_id is not null then
-    delete from public.reviews where customer_id=v_customer_id;
-    delete from public.jobs where customer_id=v_customer_id;
-    delete from public.customers where id=v_customer_id;
-  end if;
-  if v_handyman_id is not null then
-    delete from public.reviews where handyman_id=v_handyman_id;
-    delete from public.job_assignments where handyman_id=v_handyman_id;
-    delete from public.job_matches where handyman_id=v_handyman_id;
-    delete from public.entitlements where handyman_id=v_handyman_id;
-    delete from public.service_areas where handyman_id=v_handyman_id;
-    delete from public.handyman_skills where handyman_id=v_handyman_id;
-    delete from public.handymen where id=v_handyman_id;
-  end if;
-  insert into public.pilot_test_runs(status,result) values(v_status,v_result);
+  begin
+    if v_handyman_id is not null then
+      delete from public.reviews where handyman_id=v_handyman_id;
+      delete from public.job_assignments where handyman_id=v_handyman_id;
+      delete from public.job_matches where handyman_id=v_handyman_id;
+      delete from public.entitlements where handyman_id=v_handyman_id;
+      delete from public.service_areas where handyman_id=v_handyman_id;
+      delete from public.handyman_skills where handyman_id=v_handyman_id;
+    end if;
+    if v_customer_id is not null then
+      delete from public.reviews where customer_id=v_customer_id;
+      delete from public.jobs where customer_id=v_customer_id;
+    end if;
+    if v_handyman_id is not null then delete from public.handymen where id=v_handyman_id; end if;
+    if v_customer_id is not null then delete from public.customers where id=v_customer_id; end if;
+  exception when others then null;
+  end;
+  insert into public.pilot_test_runs(status,result) values('failed',v_result);
   return v_result;
 end;
 $$;

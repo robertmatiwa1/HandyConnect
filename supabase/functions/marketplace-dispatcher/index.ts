@@ -23,10 +23,16 @@ async function sendWhatsApp(to:string,bodyText:string,ui?:any){
 }
 
 Deno.serve(async(req)=>{
-  if(req.method!=="POST"&&req.method!=="GET")return json({error:"method_not_allowed"},405);
+  if(req.method!=="POST")return json({error:"method_not_allowed"},405);
   const key=serviceKey(),url=env("SUPABASE_URL");
   if(!key||!url)return json({error:"server_configuration_error"},500);
   const s=createClient(url,key,{auth:{persistSession:false,autoRefreshToken:false,detectSessionInUrl:false}});
+
+  const dispatchToken=req.headers.get("x-dispatch-token")?.trim()??"";
+  const auth=await s.rpc("validate_dispatch_token",{p_token:dispatchToken});
+  if(auth.error){console.error("dispatcher auth check failed",auth.error);return json({error:"dispatcher_auth_failed"},500)}
+  if(auth.data!==true)return json({error:"unauthorized"},401);
+
   try{
     const tick=await s.rpc("dispatch_marketplace_tick",{p_job_limit:25});
     if(tick.error)throw tick.error;

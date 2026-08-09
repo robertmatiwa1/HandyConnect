@@ -1,53 +1,6 @@
-# Build artifacts
-build/
-android/
-ios/
-web-build/
-*.log
-
-# OS system files
-.DS_Store
-Thumbs.db
-
-# Environment variables and secrets
 .env
-.env.local
-.env.production
-.env.development
-
-# IDE and editor settings
-.vscode/
-.idea/
-*.swp
-
-# Binary and archive files
-*.exe
-*.dll
-*.zip
-*.tar
-*.png
-mobile/assets/*.png
-*.jpg
-*.jpeg
-*.mp4
-*.mp3
-*.pdf
-*.apk
-*.ipa
-
-# Temporary files
-*.tmp
-*.cache
-
-# Node and test artifacts
+.env.*
+!.env.example
+.DS_Store
 node_modules/
-coverage/
-dist/
-
-# Expo cache
-.expo/
-.expo-shared/
-
-# Next.js build artifacts
-.next/
-.turbo/
+.supabase/

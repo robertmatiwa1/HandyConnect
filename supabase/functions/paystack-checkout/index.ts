@@ -19,8 +19,9 @@ Deno.serve(async(req)=>{
     if(!h.email)return json({error:"billing_email_required"},422);
     const planq=await s.from("plans").select("code,price_cents,currency,active").eq("code","pro_monthly").maybeSingle();if(planq.error)throw planq.error;const plan=planq.data;
     if(!plan?.active)return json({error:"pro_plan_unavailable"},409);
-    const eq=await s.from("entitlements").select("id,valid_until").eq("handyman_id",h.id).eq("entitlement_type","pro_access").eq("status","active").or(`valid_until.is.null,valid_until.gt.${new Date().toISOString()}`).limit(1);if(eq.error)throw eq.error;
-    if(eq.data?.length)return json({ok:true,already_active:true,valid_until:eq.data[0].valid_until});
+    const eq=await s.from("entitlements").select("id,valid_until").eq("handyman_id",h.id).eq("entitlement_type","pro_access").eq("status","active").order("created_at",{ascending:false});if(eq.error)throw eq.error;
+    const activePro=(eq.data??[]).find((x:any)=>!x.valid_until||new Date(x.valid_until)>new Date());
+    if(activePro)return json({ok:true,already_active:true,valid_until:activePro.valid_until});
 
     const existing=await s.from("payments").select("id,checkout_url,checkout_expires_at,provider_payment_id,status").eq("handyman_id",h.id).eq("provider","paystack").eq("purpose","subscription").in("status",["initiated","pending"]).order("created_at",{ascending:false}).limit(1);if(existing.error)throw existing.error;
     const recent=existing.data?.[0];

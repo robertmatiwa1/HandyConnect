@@ -8,8 +8,8 @@ Deno.serve(async(req)=>{
   if(req.method!=="POST")return json({error:"method_not_allowed"},405);
   const key=serviceKey(),url=env("SUPABASE_URL");
   if(!key||!url||req.headers.get("apikey")!==key)return json({error:"unauthorized"},401);
-  const secret=env("PAYSTACK_SECRET_KEY"),paystackPlan=env("PAYSTACK_PRO_PLAN_CODE");
-  if(!secret||!paystackPlan)return json({error:"payments_not_configured"},503);
+  const secret=env("PAYSTACK_SECRET_KEY");
+  if(!secret)return json({error:"payments_not_configured"},503);
   let input:any;try{input=await req.json()}catch{return json({error:"invalid_json"},400)}
   const phone=String(input?.phone??"").trim();if(!phone)return json({error:"phone_required"},400);
   const s=createClient(url,key,{auth:{persistSession:false,autoRefreshToken:false,detectSessionInUrl:false}});
@@ -17,8 +17,10 @@ Deno.serve(async(req)=>{
     const hq=await s.from("handymen").select("id,phone,email,status").eq("phone",phone).maybeSingle();if(hq.error)throw hq.error;const h=hq.data;
     if(!h||h.status!=="active")return json({error:"handyman_not_found"},404);
     if(!h.email)return json({error:"billing_email_required"},422);
-    const planq=await s.from("plans").select("code,price_cents,currency,active").eq("code","pro_monthly").maybeSingle();if(planq.error)throw planq.error;const plan=planq.data;
+    const planq=await s.from("plans").select("code,price_cents,currency,active,provider_plan_code").eq("code","pro_monthly").maybeSingle();if(planq.error)throw planq.error;const plan=planq.data;
     if(!plan?.active)return json({error:"pro_plan_unavailable"},409);
+    const paystackPlan=String(plan.provider_plan_code??env("PAYSTACK_PRO_PLAN_CODE")??"").trim();
+    if(!paystackPlan)return json({error:"payments_not_configured"},503);
     const eq=await s.from("entitlements").select("id,valid_until").eq("handyman_id",h.id).eq("entitlement_type","pro_access").eq("status","active").order("created_at",{ascending:false});if(eq.error)throw eq.error;
     const activePro=(eq.data??[]).find((x:any)=>!x.valid_until||new Date(x.valid_until)>new Date());
     if(activePro)return json({ok:true,already_active:true,valid_until:activePro.valid_until});

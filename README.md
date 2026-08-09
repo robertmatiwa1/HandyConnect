@@ -16,7 +16,7 @@ HandyConnect is a WhatsApp-first marketplace that connects customers with truste
 
 - Supabase Postgres: system of record
 - Supabase Edge Functions: conversation and integration layer
-- WhatsApp Cloud API: planned primary interface
+- WhatsApp Cloud API: primary interface adapter
 - PSP: planned subscription / lead-credit collection
 - GitHub: source of truth for migrations and functions
 
@@ -29,5 +29,18 @@ HandyConnect is a WhatsApp-first marketplace that connects customers with truste
 - candidate ranking by skill + city + suburb + Pro/free access
 - atomic first-accept-wins job assignment
 - deployed `conversation-engine` Edge Function for handyman onboarding and customer job intake
+- deployed `whatsapp-webhook` adapter with Meta challenge verification, `X-Hub-Signature-256` validation and outbound text support
+
+## WhatsApp configuration still required
+
+Set these Supabase Edge Function secrets before connecting Meta:
+
+- `META_APP_SECRET`
+- `WHATSAPP_VERIFY_TOKEN`
+- `WHATSAPP_ACCESS_TOKEN`
+- `WHATSAPP_PHONE_NUMBER_ID`
+- `WHATSAPP_GRAPH_VERSION`
+
+Do not commit any of those values to Git.
 
 See `docs/architecture.md` and `docs/conversations.md`.

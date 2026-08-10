@@ -43,26 +43,6 @@ const urgencyUi = {
   ],
 };
 
-function addressUi(rows: any[]) {
-  return {
-    type: "list",
-    body: "Use a saved address?",
-    button: "Choose address",
-    rows: [
-      ...rows.map((address: any) => ({
-        id: `JI_ADDR:${address.id}`,
-        title: String(address.label || "Saved address").slice(0, 24),
-        description: `${address.street_address}, ${address.suburb}, ${address.city}`.slice(0, 72),
-      })),
-      {
-        id: "JI_ADDR_NEW",
-        title: "Use another address",
-        description: "Enter a different service address",
-      },
-    ],
-  };
-}
-
 async function call(url: string, key: string, target: string, input: Incoming) {
   const response = await fetch(`${url}/functions/v1/${target}`, {
     method: "POST",
@@ -73,13 +53,22 @@ async function call(url: string, key: string, target: string, input: Incoming) {
   return await response.json();
 }
 
-async function updateSession(supabase: any, id: string, values: Record<string, unknown>) {
-  const result = await supabase.from("conversation_sessions").update(values).eq("id", id);
+async function updateSession(
+  supabase: any,
+  id: string,
+  values: Record<string, unknown>,
+) {
+  const result = await supabase.from("conversation_sessions").update(values).eq(
+    "id",
+    id,
+  );
   if (result.error) throw result.error;
 }
 
 Deno.serve(async (request) => {
-  if (request.method !== "POST") return json({ error: "method_not_allowed" }, 405);
+  if (request.method !== "POST") {
+    return json({ error: "method_not_allowed" }, 405);
+  }
 
   const key = secretKey();
   const url = Deno.env.get("SUPABASE_URL") ?? "";
@@ -100,7 +89,11 @@ Deno.serve(async (request) => {
   if (!phone) return json({ handled: false });
 
   const supabase = createClient(url, key, {
-    auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false },
+    auth: {
+      persistSession: false,
+      autoRefreshToken: false,
+      detectSessionInUrl: false,
+    },
   });
 
   try {
@@ -110,7 +103,9 @@ Deno.serve(async (request) => {
         message_id: input.external_message_id,
       });
       if (claim.error) {
-        if (claim.error.code === "23505") return json({ handled: true, duplicate: true });
+        if (claim.error.code === "23505") {
+          return json({ handled: true, duplicate: true });
+        }
         throw claim.error;
       }
     }
@@ -143,150 +138,59 @@ Deno.serve(async (request) => {
       return json(await call(url, key, "duplicate-job-router", input));
     }
 
-    if (["ji_description", "ji_urgency", "ji_time", "ji_photo"].includes(state)) {
+    if (
+      ["ji_description", "ji_urgency", "ji_time", "ji_photo", "ji_post_photo"]
+        .includes(state)
+    ) {
       return json(await call(url, key, "job-intake-router", input));
     }
-
-    const customerResult = await supabase
-      .from("customers")
-      .select("id,full_name,preferred_name")
-      .eq("phone", phone)
-      .maybeSingle();
-    if (customerResult.error) throw customerResult.error;
-    const customer = customerResult.data;
 
     if (state === "ji_location") {
       const location = parseLocation(message);
       if (!location) {
         return json({
           handled: true,
-          reply: "Send suburb and city, separated by a comma. Example: Langa, Cape Town",
+          reply:
+            "Send suburb and city, separated by a comma. Example: Langa, Cape Town",
         });
       }
 
       const context = { ...(session.context ?? {}), ...location };
-      if (customer?.id) {
-        const addresses = await supabase
-          .from("customer_addresses")
-          .select("id,label,street_address,suburb,city,province")
-          .eq("customer_id", customer.id)
-          .order("is_default", { ascending: false })
-          .order("last_used_at", { ascending: false })
-          .limit(5);
-        if (addresses.error) throw addresses.error;
-
-        if ((addresses.data ?? []).length) {
-          await updateSession(supabase, session.id, {
-            state: "ji_saved_address",
-            context,
-          });
-          return json({
-            handled: true,
-            reply: addressUi(addresses.data ?? []).body,
-            ui: addressUi(addresses.data ?? []),
-          });
-        }
-      }
-
-      await updateSession(supabase, session.id, {
-        state: "ji_address",
-        context,
-      });
-      return json({
-        handled: true,
-        reply: "What is the street address? It stays private and is shared only with the handyman who accepts.",
-      });
-    }
-
-    if (state === "ji_saved_address") {
-      if (message === "JI_ADDR_NEW") {
-        await updateSession(supabase, session.id, { state: "ji_address" });
-        return json({
-          handled: true,
-          reply: "What is the street address? It stays private and is shared only with the handyman who accepts.",
-        });
-      }
-
-      if (message.startsWith("JI_ADDR:") && customer?.id) {
-        const addressId = message.slice(8);
-        const address = await supabase
-          .from("customer_addresses")
-          .select("id,street_address,suburb,city,province")
-          .eq("id", addressId)
-          .eq("customer_id", customer.id)
-          .maybeSingle();
-        if (address.error) throw address.error;
-
-        if (!address.data) {
-          return json({
-            handled: true,
-            reply: "That saved address is no longer available.",
-            ui: {
-              type: "buttons",
-              body: "Enter another address",
-              buttons: [{ id: "JI_ADDR_NEW", title: "New address" }],
-            },
-          });
-        }
-
-        const touched = await supabase
-          .from("customer_addresses")
-          .update({ last_used_at: new Date().toISOString() })
-          .eq("id", address.data.id);
-        if (touched.error) throw touched.error;
-
-        await updateSession(supabase, session.id, {
-          state: "ji_urgency",
-          context: {
-            ...(session.context ?? {}),
-            street_address: address.data.street_address,
-            suburb: address.data.suburb,
-            city: address.data.city,
-            province: address.data.province,
-          },
-        });
-        return json({ handled: true, reply: urgencyUi.body, ui: urgencyUi });
-      }
-
-      return json({
-        handled: true,
-        reply: "Choose a saved address or use another one.",
-      });
-    }
-
-    if (state === "ji_address") {
-      if (message.length < 5) {
-        return json({ handled: true, reply: "Send the street number and street name." });
-      }
       await updateSession(supabase, session.id, {
         state: "ji_urgency",
-        context: { ...(session.context ?? {}), street_address: message },
+        context,
       });
       return json({ handled: true, reply: urgencyUi.body, ui: urgencyUi });
     }
 
     if (message === "REQUEST_HELP" || message === "NEW_REQUEST") {
-      return json(await call(url, key, "duplicate-job-router", {
-        ...input,
-        message: "REQUEST_HELP",
-      }));
+      return json(
+        await call(url, key, "duplicate-job-router", {
+          ...input,
+          message: "REQUEST_HELP",
+        }),
+      );
     }
 
     if (message === "H_JOBS" || message.startsWith("HJOBV:")) {
-      const handymanJobs = await call(url, key, "handyman-job-history-router", input);
+      const handymanJobs = await call(
+        url,
+        key,
+        "handyman-job-history-router",
+        input,
+      );
       if (handymanJobs?.handled) return json(handymanJobs);
     }
 
-    const customerCommand =
-      [
-        "HOME",
-        "MY_JOBS",
-        "CUSTOMER_JOBS",
-        "CUST_MORE",
-        "CUST_PROFILE",
-        "CUST_ADDRESSES",
-        "CUST_HELP",
-      ].includes(message) ||
+    const customerCommand = [
+      "HOME",
+      "MY_JOBS",
+      "CUSTOMER_JOBS",
+      "CUST_MORE",
+      "CUST_PROFILE",
+      "CUST_ADDRESSES",
+      "CUST_HELP",
+    ].includes(message) ||
       message.startsWith("CJOB:") ||
       message.startsWith("CSTALE:") ||
       message.startsWith("EDIT_JOB:") ||

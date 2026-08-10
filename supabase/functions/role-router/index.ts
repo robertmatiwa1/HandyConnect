@@ -1,6 +1,10 @@
 import { createClient } from "@supabase/supabase-js";
 
-type Incoming = { channel?: string; external_user_id?: string; message?: string };
+type Incoming = {
+  channel?: string;
+  external_user_id?: string;
+  message?: string;
+};
 type Role = "customer" | "handyman";
 
 const json = (body: unknown, status = 200) =>
@@ -23,7 +27,9 @@ function secretKey() {
 }
 
 const isGreeting = (message: string) =>
-  ["hi", "hello", "hey", "menu", "start", "home"].includes(message.toLowerCase()) || message === "HOME";
+  ["hi", "hello", "hey", "menu", "start", "home"].includes(
+    message.toLowerCase(),
+  ) || message === "HOME";
 
 const chooseRoleUi = {
   type: "buttons",
@@ -52,10 +58,12 @@ function customerMoreUi(canSwitch: boolean) {
     body: "More options",
     button: "Choose",
     rows: [
-      { id: "CUST_ADDRESSES", title: "Saved addresses" },
       { id: "CUST_PROFILE", title: "My profile" },
-      { id: "CUST_HELP", title: "Help" },
-      ...(canSwitch ? [{ id: "SWITCH_HANDYMAN", title: "Switch to provider" }] : []),
+      { id: "CUST_HELP", title: "How it works" },
+      ...(canSwitch
+        ? [{ id: "SWITCH_HANDYMAN", title: "Switch to provider" }]
+        : []),
+      { id: "HOME", title: "Home" },
     ],
   };
 }
@@ -69,7 +77,9 @@ function handymanUi(canSwitch: boolean) {
       { id: "GO_AVAILABLE", title: "I'm available" },
       { id: "H_JOBS", title: "My jobs & offers" },
       { id: "MY_PROFILE", title: "My profile" },
-      ...(canSwitch ? [{ id: "SWITCH_CUSTOMER", title: "Switch to customer" }] : []),
+      ...(canSwitch
+        ? [{ id: "SWITCH_CUSTOMER", title: "Switch to customer" }]
+        : []),
     ],
   };
 }
@@ -79,7 +89,9 @@ Deno.serve(async (request) => {
 
   const key = secretKey();
   const url = Deno.env.get("SUPABASE_URL") ?? "";
-  if (!key || !url || request.headers.get("apikey") !== key) return json({ handled: false });
+  if (!key || !url || request.headers.get("apikey") !== key) {
+    return json({ handled: false });
+  }
 
   let input: Incoming;
   try {
@@ -93,13 +105,24 @@ Deno.serve(async (request) => {
   if (!phone) return json({ handled: false });
 
   const supabase = createClient(url, key, {
-    auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false },
+    auth: {
+      persistSession: false,
+      autoRefreshToken: false,
+      detectSessionInUrl: false,
+    },
   });
 
   const [customer, handyman, preference] = await Promise.all([
-    supabase.from("customers").select("id,full_name,preferred_name").eq("phone", phone).maybeSingle(),
-    supabase.from("handymen").select("id,full_name").eq("phone", phone).maybeSingle(),
-    supabase.from("whatsapp_role_preferences").select("active_role").eq("external_user_id", phone).maybeSingle(),
+    supabase.from("customers").select("id,full_name,preferred_name").eq(
+      "phone",
+      phone,
+    ).maybeSingle(),
+    supabase.from("handymen").select("id,full_name").eq("phone", phone)
+      .maybeSingle(),
+    supabase.from("whatsapp_role_preferences").select("active_role").eq(
+      "external_user_id",
+      phone,
+    ).maybeSingle(),
   ]);
 
   const hasCustomer = Boolean(customer.data);
@@ -108,7 +131,11 @@ Deno.serve(async (request) => {
 
   async function setRole(role: Role) {
     await supabase.from("whatsapp_role_preferences").upsert(
-      { external_user_id: phone, active_role: role, updated_at: new Date().toISOString() },
+      {
+        external_user_id: phone,
+        active_role: role,
+        updated_at: new Date().toISOString(),
+      },
       { onConflict: "external_user_id" },
     );
   }
@@ -118,7 +145,9 @@ Deno.serve(async (request) => {
     await setRole("customer");
     return json({
       handled: true,
-      reply: message === "SWITCH_CUSTOMER" ? "Switched to customer mode." : "What needs fixing?",
+      reply: message === "SWITCH_CUSTOMER"
+        ? "Switched to customer mode."
+        : "What needs fixing?",
       ui: customerUi(),
     });
   }
@@ -126,11 +155,17 @@ Deno.serve(async (request) => {
   if (message === "ROLE_USE_HANDYMAN" || message === "SWITCH_HANDYMAN") {
     await setRole("handyman");
     if (!hasHandyman) {
-      return json({ handled: true, delegate: "conversation-engine", delegate_message: "ROLE_HANDYMAN" });
+      return json({
+        handled: true,
+        delegate: "conversation-engine",
+        delegate_message: "ROLE_HANDYMAN",
+      });
     }
     return json({
       handled: true,
-      reply: message === "SWITCH_HANDYMAN" ? "Switched to provider mode." : "Provider mode selected.",
+      reply: message === "SWITCH_HANDYMAN"
+        ? "Switched to provider mode."
+        : "Provider mode selected.",
       ui: handymanUi(hasCustomer),
     });
   }
@@ -144,13 +179,23 @@ Deno.serve(async (request) => {
   }
 
   if (message === "CUST_MORE" && activeRole === "customer") {
-    return json({ handled: true, reply: "More options", ui: customerMoreUi(hasHandyman) });
+    return json({
+      handled: true,
+      reply: "More options",
+      ui: customerMoreUi(hasHandyman),
+    });
   }
 
-  if (!isGreeting(message)) return json({ handled: false, active_role: activeRole });
+  if (!isGreeting(message)) {
+    return json({ handled: false, active_role: activeRole });
+  }
 
   if (!hasCustomer && !hasHandyman) {
-    return json({ handled: true, reply: "Welcome to HandyConnect.", ui: chooseRoleUi });
+    return json({
+      handled: true,
+      reply: "Welcome to HandyConnect.",
+      ui: chooseRoleUi,
+    });
   }
 
   if (activeRole === "handyman") {
@@ -162,10 +207,9 @@ Deno.serve(async (request) => {
     });
   }
 
-  const firstName = customer.data?.preferred_name || customer.data?.full_name?.split(" ")[0];
   return json({
     handled: true,
-    reply: firstName ? `Hi ${firstName} 👋` : "Hi 👋",
-    ui: customerUi(),
+    delegate: "customer-home-router",
+    delegate_message: message,
   });
 });

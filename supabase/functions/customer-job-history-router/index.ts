@@ -1,15 +1,334 @@
 import { createClient } from "@supabase/supabase-js";
-type Incoming={channel?:string;external_user_id?:string;message?:string};
-const json=(b:unknown,s=200)=>new Response(JSON.stringify(b),{status:s,headers:{"content-type":"application/json; charset=utf-8"}});
-function key(){const raw=Deno.env.get("SUPABASE_SECRET_KEYS")??"";if(raw){try{const p=JSON.parse(raw);if(typeof p.default==='string')return p.default}catch{}}return Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")??""}
-function stage(j:any){if(['matching','open'].includes(j.status))return'Looking for handyman';if(j.status==='assigned'&&!j.arrived_at)return j.scheduled_arrival_at?'Handyman on the way':'Handyman assigned';if(j.arrived_at&&!j.started_at)return'Handyman arrived';if(j.started_at&&!j.completion_requested_at)return'Work in progress';if(j.completion_requested_at&&!j.customer_completed_at)return'Work finished · confirm completion';if(j.status==='completed'||j.customer_completed_at)return'Completed';if(j.status==='cancelled')return'Cancelled';return String(j.status||'Updated').replaceAll('_',' ')}
-function icon(j:any){if(['matching','open'].includes(j.status))return'🔎';if(j.status==='cancelled')return'❌';if(j.status==='completed'||j.customer_completed_at)return'✅';if(j.status==='in_progress')return'🛠️';return'🔧'}
-function eta(v:any){return v?new Intl.DateTimeFormat('en-ZA',{timeZone:'Africa/Johannesburg',day:'2-digit',month:'short',hour:'2-digit',minute:'2-digit'}).format(new Date(v)):null}
-function card(j:any){let x=`${icon(j)} ${j.description}\n${stage(j)}\n📍 ${[j.suburb,j.city].filter(Boolean).join(', ')}`;if(j.handyman_name)x+=`\n👤 ${j.handyman_name}${j.handyman_verification==='verified'?' ✓':''}${j.handyman_rating!=null?` · ${j.handyman_rating}/5`:''}`;if(j.agreed_quote!=null)x+=`\n💰 R${Number(j.agreed_quote).toFixed(2)} agreed`;const e=eta(j.scheduled_arrival_at);if(j.assignment_id&&j.arrived_at)x+='\n🚗 Arrived';else if(e)x+=`\n🕒 ${e}`;if(['matching','open'].includes(j.status))x+='\n\nWe’ll message you as soon as a handyman accepts.';return x}
-function row(j:any){return{id:`CJOB:${j.job_id}`,title:String(j.description).slice(0,24),description:`${stage(j)} · ${j.suburb||j.city||''}`.slice(0,72)}}
-Deno.serve(async req=>{if(req.method!=='POST')return json({error:'method_not_allowed'},405);const k=key(),url=Deno.env.get('SUPABASE_URL')??'';if(!k||!url||req.headers.get('apikey')!==k)return json({error:'unauthorized'},401);let i:Incoming;try{i=await req.json()}catch{return json({error:'invalid_json'},400)}const phone=i.external_user_id?.trim(),msg=i.message?.trim()??'';if(!phone||!(msg==='MY_JOBS'||msg==='CUSTOMER_JOBS'||msg.startsWith('CJOB:')||msg.startsWith('CSTALE:')))return json({handled:false});const s=createClient(url,k,{auth:{persistSession:false,autoRefreshToken:false,detectSessionInUrl:false}}),c=await s.from('customers').select('id').eq('phone',phone).maybeSingle();if(!c.data)return json({handled:true,reply:'You do not have any jobs yet.'});
-if(msg.startsWith('CSTALE:')){const id=msg.slice(7),r=await s.rpc('close_stale_customer_job',{p_job_id:id,p_customer_phone:phone});if(!r.data?.ok)return json({handled:true,reply:r.data?.reason==='cannot_close_after_assignment'?'A handyman is already assigned. Use the job cancellation option instead.':'I could not close that request.',ui:{type:'buttons',body:'My jobs',buttons:[{id:'MY_JOBS',title:'Back to jobs'},{id:'HOME',title:'Home'}]}});return json({handled:true,reply:'Request closed.',ui:{type:'buttons',body:'What next?',buttons:[{id:'MY_JOBS',title:'My jobs'},{id:'REQUEST_HELP',title:'New request'},{id:'HOME',title:'Home'}]}})}
-if(msg==='MY_JOBS'||msg==='CUSTOMER_JOBS'){const q=await s.from('customer_job_status').select('*').eq('customer_id',c.data.id).order('created_at',{ascending:false}).limit(10);if(q.error)throw q.error;const jobs=q.data??[];if(!jobs.length)return json({handled:true,reply:'You do not have any jobs yet.',ui:{type:'buttons',body:'My jobs',buttons:[{id:'REQUEST_HELP',title:'Request handyman'},{id:'HOME',title:'Home'}]}});return json({handled:true,reply:'Your jobs',ui:{type:'list',body:'Select a job to manage it.',button:'View job',rows:jobs.slice(0,8).map(row)}})}
-const id=msg.slice(5),q=await s.from('customer_job_status').select('*').eq('job_id',id).eq('customer_id',c.data.id).maybeSingle();if(!q.data)return json({handled:true,reply:'That job is not linked to your account.',ui:{type:'buttons',body:'My jobs',buttons:[{id:'MY_JOBS',title:'Back to jobs'}]}});const j=q.data,buttons:any[]=[];
-if(['open','matching'].includes(j.status)){buttons.push({id:`EDIT_JOB:${j.job_id}`,title:'Edit request'},{id:`CANCEL:${j.job_id}`,title:'Cancel request'},{id:'MY_JOBS',title:'Back to jobs'})}else if(['assigned','in_progress'].includes(j.status)){const quote=await s.from('job_quotes').select('id,status,amount').eq('job_id',j.job_id).order('proposed_at',{ascending:false}).limit(1).maybeSingle();if(j.status==='assigned'&&quote.data?.status==='proposed'){buttons.push({id:`QUOTE_ACCEPT:${quote.data.id}`,title:`Accept R${Number(quote.data.amount).toFixed(0)}`},{id:`QUOTE_REJECT:${quote.data.id}`,title:'Reject quote'})}if(j.status==='assigned'&&j.arrived_at&&quote.data?.status==='accepted')buttons.push({id:`CONFIRM_START:${j.job_id}`,title:'Confirm start'});if(j.status==='in_progress'&&j.completion_requested_at)buttons.push({id:`CONFIRM_COMPLETE:${j.job_id}`,title:'Confirm complete'});if(j.handyman_name)buttons.push({id:`PROVIDER_PROFILE:${j.job_id}`,title:'View provider'});buttons.push({id:`REPORT_JOB:${j.job_id}`,title:'Report a problem'},{id:'MY_JOBS',title:'Back to jobs'})}else if(j.status==='completed'){buttons.push({id:`RATE_MENU:${j.job_id}`,title:'Rate handyman'},{id:`REPORT_JOB:${j.job_id}`,title:'Report a problem'},{id:'MY_JOBS',title:'Back to jobs'})}else buttons.push({id:'MY_JOBS',title:'Back to jobs'},{id:'HOME',title:'Home'});
-return json({handled:true,reply:card(j),ui:{type:'list',body:'Manage request',button:'Choose',rows:buttons.slice(0,10)}})});
+
+type Incoming = {
+  channel?: string;
+  external_user_id?: string;
+  message?: string;
+};
+type Action = { id: string; title: string; description?: string };
+
+const json = (body: unknown, status = 200) =>
+  new Response(JSON.stringify(body), {
+    status,
+    headers: { "content-type": "application/json; charset=utf-8" },
+  });
+
+function key() {
+  const raw = Deno.env.get("SUPABASE_SECRET_KEYS") ?? "";
+  if (raw) {
+    try {
+      const parsed = JSON.parse(raw);
+      if (typeof parsed.default === "string") return parsed.default;
+    } catch {
+      // Fall back to the legacy service-role key below.
+    }
+  }
+  return Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
+}
+
+function stage(job: any) {
+  if (["matching", "open"].includes(job.status)) return "Finding a handyman";
+  if (job.status === "assigned" && !job.arrived_at) {
+    return job.scheduled_arrival_at
+      ? "Handyman on the way"
+      : "Handyman assigned";
+  }
+  if (job.arrived_at && !job.started_at) return "Handyman arrived";
+  if (job.started_at && !job.completion_requested_at) return "Work in progress";
+  if (job.completion_requested_at && !job.customer_completed_at) {
+    return "Work finished · confirm completion";
+  }
+  if (job.status === "completed" || job.customer_completed_at) {
+    return "Completed";
+  }
+  if (job.status === "cancelled") return "Cancelled";
+  return String(job.status || "Updated").replaceAll("_", " ");
+}
+
+function icon(job: any) {
+  if (["matching", "open"].includes(job.status)) return "🔎";
+  if (job.status === "cancelled") return "❌";
+  if (job.status === "completed" || job.customer_completed_at) return "✅";
+  if (job.status === "in_progress") return "🛠️";
+  return "🔧";
+}
+
+function eta(value: any) {
+  return value
+    ? new Intl.DateTimeFormat("en-ZA", {
+      timeZone: "Africa/Johannesburg",
+      day: "2-digit",
+      month: "short",
+      hour: "2-digit",
+      minute: "2-digit",
+    }).format(new Date(value))
+    : null;
+}
+
+function timing(job: any) {
+  if (job.urgency === "urgent") return "As soon as possible";
+  if (job.urgency === "today") {
+    const window = String(job.appointment_window || "any time").replaceAll(
+      "_",
+      " ",
+    );
+    return `Today · ${window}`;
+  }
+  if (job.urgency === "flexible") return "Flexible";
+  return null;
+}
+
+function card(job: any) {
+  const lines = [
+    `${icon(job)} ${stage(job)}`,
+    job.description,
+    `📍 ${[job.suburb, job.city].filter(Boolean).join(", ")}`,
+  ];
+  const when = timing(job);
+  if (when) lines.push(`🕒 ${when}`);
+  if (job.handyman_name) {
+    lines.push(
+      `👤 ${job.handyman_name}${
+        job.handyman_verification === "verified" ? " ✓" : ""
+      }${job.handyman_rating != null ? ` · ${job.handyman_rating}/5` : ""}`,
+    );
+  }
+  if (job.agreed_quote != null) {
+    lines.push(`💰 R${Number(job.agreed_quote).toFixed(2)} agreed`);
+  }
+  const expected = eta(job.scheduled_arrival_at);
+  if (job.assignment_id && job.arrived_at) lines.push("🚗 Arrived");
+  else if (expected) lines.push(`🕒 ${expected}`);
+  if (["matching", "open"].includes(job.status)) {
+    lines.push(
+      "",
+      "Your request is active. You don’t need to keep checking—we’ll message you as soon as a verified handyman accepts.",
+    );
+  }
+  return lines.join("\n");
+}
+
+function row(job: any) {
+  return {
+    id: `CJOB:${job.job_id}`,
+    title: short(String(job.description)),
+    description: `${stage(job)} · ${job.suburb || job.city || ""}`.slice(0, 72),
+  };
+}
+
+function short(value: string) {
+  if (value.length <= 24) return value;
+  const prefix = value.slice(0, 23);
+  const boundary = prefix.lastIndexOf(" ");
+  return `${prefix.slice(0, boundary > 12 ? boundary : 22)}…`;
+}
+
+function actionsUi(actions: Action[]) {
+  return {
+    type: "list",
+    body: "What would you like to do?",
+    button: "Choose action",
+    rows: actions.slice(0, 10),
+  };
+}
+
+Deno.serve(async (request) => {
+  if (request.method !== "POST") {
+    return json({ error: "method_not_allowed" }, 405);
+  }
+  const secret = key();
+  const url = Deno.env.get("SUPABASE_URL") ?? "";
+  if (!secret || !url || request.headers.get("apikey") !== secret) {
+    return json({ error: "unauthorized" }, 401);
+  }
+
+  let input: Incoming;
+  try {
+    input = await request.json();
+  } catch {
+    return json({ error: "invalid_json" }, 400);
+  }
+  const phone = input.external_user_id?.trim();
+  const message = input.message?.trim() ?? "";
+  if (
+    !phone ||
+    !(message === "MY_JOBS" || message === "CUSTOMER_JOBS" ||
+      message.startsWith("CJOB:") || message.startsWith("CSTALE:"))
+  ) return json({ handled: false });
+
+  const supabase = createClient(url, secret, {
+    auth: {
+      persistSession: false,
+      autoRefreshToken: false,
+      detectSessionInUrl: false,
+    },
+  });
+  const customer = await supabase.from("customers").select("id").eq(
+    "phone",
+    phone,
+  ).maybeSingle();
+  if (customer.error) throw customer.error;
+  if (!customer.data) {
+    return json({ handled: true, reply: "You don’t have any jobs yet." });
+  }
+
+  if (message.startsWith("CSTALE:")) {
+    const jobId = message.slice(7);
+    const result = await supabase.rpc("close_stale_customer_job", {
+      p_job_id: jobId,
+      p_customer_phone: phone,
+    });
+    if (!result.data?.ok) {
+      return json({
+        handled: true,
+        reply: result.data?.reason === "cannot_close_after_assignment"
+          ? "A handyman is already assigned. Use the job cancellation option instead."
+          : "I couldn’t close that request.",
+        ui: {
+          type: "buttons",
+          body: "What next?",
+          buttons: [
+            { id: "MY_JOBS", title: "Back to jobs" },
+            { id: "HOME", title: "Home" },
+          ],
+        },
+      });
+    }
+    return json({
+      handled: true,
+      reply: "Request closed.",
+      ui: {
+        type: "buttons",
+        body: "What next?",
+        buttons: [
+          { id: "MY_JOBS", title: "My jobs" },
+          { id: "REQUEST_HELP", title: "New request" },
+          { id: "HOME", title: "Home" },
+        ],
+      },
+    });
+  }
+
+  if (message === "MY_JOBS" || message === "CUSTOMER_JOBS") {
+    const query = await supabase
+      .from("customer_job_status")
+      .select("*")
+      .eq("customer_id", customer.data.id)
+      .order("created_at", { ascending: false })
+      .limit(10);
+    if (query.error) throw query.error;
+    const jobs = query.data ?? [];
+    if (!jobs.length) {
+      return json({
+        handled: true,
+        reply: "You don’t have any jobs yet.",
+        ui: {
+          type: "buttons",
+          body: "Need something fixed?",
+          buttons: [
+            { id: "REQUEST_HELP", title: "Request handyman" },
+            { id: "HOME", title: "Home" },
+          ],
+        },
+      });
+    }
+    const body = "Which job would you like to check?";
+    return json({
+      handled: true,
+      reply: body,
+      ui: {
+        type: "list",
+        body,
+        button: "Choose a job",
+        rows: jobs.slice(0, 8).map(row),
+      },
+    });
+  }
+
+  const jobId = message.slice(5);
+  const query = await supabase
+    .from("customer_job_status")
+    .select("*")
+    .eq("job_id", jobId)
+    .eq("customer_id", customer.data.id)
+    .maybeSingle();
+  if (query.error) throw query.error;
+  if (!query.data) {
+    return json({
+      handled: true,
+      reply: "That job is not linked to your account.",
+      ui: {
+        type: "buttons",
+        body: "My jobs",
+        buttons: [{ id: "MY_JOBS", title: "Back to jobs" }],
+      },
+    });
+  }
+
+  const job = query.data;
+  const actions: Action[] = [];
+  if (["open", "matching"].includes(job.status)) {
+    actions.push(
+      { id: `ADD_PHOTO:${job.job_id}`, title: "Add a photo" },
+      { id: `EDIT_JOB:${job.job_id}`, title: "Edit request" },
+      { id: `CANCEL:${job.job_id}`, title: "Cancel request" },
+      { id: "MY_JOBS", title: "Back to jobs" },
+    );
+  } else if (["assigned", "in_progress"].includes(job.status)) {
+    const quote = await supabase
+      .from("job_quotes")
+      .select("id,status,amount")
+      .eq("job_id", job.job_id)
+      .order("proposed_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    if (quote.error) throw quote.error;
+    if (job.status === "assigned" && quote.data?.status === "proposed") {
+      actions.push(
+        {
+          id: `QUOTE_ACCEPT:${quote.data.id}`,
+          title: `Accept R${Number(quote.data.amount).toFixed(0)}`,
+        },
+        { id: `QUOTE_REJECT:${quote.data.id}`, title: "Reject quote" },
+      );
+    }
+    if (
+      job.status === "assigned" && job.arrived_at &&
+      quote.data?.status === "accepted"
+    ) {
+      actions.push({
+        id: `CONFIRM_START:${job.job_id}`,
+        title: "Confirm start",
+      });
+    }
+    if (job.status === "in_progress" && job.completion_requested_at) {
+      actions.push({
+        id: `CONFIRM_COMPLETE:${job.job_id}`,
+        title: "Confirm complete",
+      });
+    }
+    if (job.handyman_name) {
+      actions.push({
+        id: `PROVIDER_PROFILE:${job.job_id}`,
+        title: "View provider",
+      });
+    }
+    actions.push(
+      { id: `REPORT_JOB:${job.job_id}`, title: "Report a problem" },
+      { id: "MY_JOBS", title: "Back to jobs" },
+    );
+  } else if (job.status === "completed") {
+    actions.push(
+      { id: `RATE_MENU:${job.job_id}`, title: "Rate handyman" },
+      { id: `REPORT_JOB:${job.job_id}`, title: "Report a problem" },
+      { id: "MY_JOBS", title: "Back to jobs" },
+    );
+  } else {
+    actions.push(
+      { id: "MY_JOBS", title: "Back to jobs" },
+      { id: "HOME", title: "Home" },
+    );
+  }
+
+  return json({ handled: true, reply: card(job), ui: actionsUi(actions) });
+});

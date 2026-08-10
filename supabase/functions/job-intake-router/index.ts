@@ -59,14 +59,23 @@ const timeUi = {
   ],
 };
 
-const photoUi = {
-  type: "buttons",
-  body: "Add a photo? It can help handymen assess the job.",
-  buttons: [{ id: "JI_SKIP_PHOTO", title: "Skip" }],
-};
+function postPhotoUi(jobId: string) {
+  return {
+    type: "buttons",
+    body: "Send one clear photo of the problem, or choose Not now.",
+    buttons: [{ id: `JI_CANCEL_PHOTO:${jobId}`, title: "Not now" }],
+  };
+}
 
-async function updateSession(supabase: any, id: string, values: Record<string, unknown>) {
-  const result = await supabase.from("conversation_sessions").update(values).eq("id", id);
+async function updateSession(
+  supabase: any,
+  id: string,
+  values: Record<string, unknown>,
+) {
+  const result = await supabase.from("conversation_sessions").update(values).eq(
+    "id",
+    id,
+  );
   if (result.error) throw result.error;
 }
 
@@ -79,13 +88,17 @@ async function fetchMedia(media: NonNullable<Incoming["media"]>) {
     `https://graph.facebook.com/${version}/${media.id}`,
     { headers: { authorization: `Bearer ${token}` } },
   );
-  if (!metadataResponse.ok) throw new Error(`media_metadata_${metadataResponse.status}`);
+  if (!metadataResponse.ok) {
+    throw new Error(`media_metadata_${metadataResponse.status}`);
+  }
 
   const metadata = await metadataResponse.json();
   const fileResponse = await fetch(metadata.url, {
     headers: { authorization: `Bearer ${token}` },
   });
-  if (!fileResponse.ok) throw new Error(`media_download_${fileResponse.status}`);
+  if (!fileResponse.ok) {
+    throw new Error(`media_download_${fileResponse.status}`);
+  }
 
   const buffer = await fileResponse.arrayBuffer();
   const mime = (
@@ -94,8 +107,12 @@ async function fetchMedia(media: NonNullable<Incoming["media"]>) {
     "application/octet-stream"
   ).split(";")[0];
 
-  if (buffer.byteLength > 10 * 1024 * 1024) throw new Error("job_media_too_large");
-  if (!["image/jpeg", "image/png", "image/webp", "application/pdf"].includes(mime)) {
+  if (buffer.byteLength > 10 * 1024 * 1024) {
+    throw new Error("job_media_too_large");
+  }
+  if (
+    !["image/jpeg", "image/png", "image/webp", "application/pdf"].includes(mime)
+  ) {
     throw new Error("unsupported_job_media");
   }
   return { buffer, mime };
@@ -116,14 +133,20 @@ async function archiveMedia(
     : file.mime === "image/webp"
     ? "webp"
     : "jpg";
-  const path = `${jobId}/${crypto.randomUUID()}-${safe(
-    media.filename || `job-photo.${extension}`,
-  )}`;
+  const path = `${jobId}/${crypto.randomUUID()}-${
+    safe(
+      media.filename || `job-photo.${extension}`,
+    )
+  }`;
 
-  const upload = await supabase.storage.from("job-media").upload(path, file.buffer, {
-    contentType: file.mime,
-    upsert: false,
-  });
+  const upload = await supabase.storage.from("job-media").upload(
+    path,
+    file.buffer,
+    {
+      contentType: file.mime,
+      upsert: false,
+    },
+  );
   if (upload.error) throw upload.error;
 
   const insert = await supabase.from("job_attachments").insert({
@@ -171,7 +194,10 @@ async function durableMedia(supabase: any, jobId: string) {
 function timingLabel(job: any) {
   if (job.urgency === "urgent") return "As soon as possible";
   if (job.urgency === "today") {
-    const window = String(job.appointment_window || "any_time").replaceAll("_", " ");
+    const window = String(job.appointment_window || "any_time").replaceAll(
+      "_",
+      " ",
+    );
     return `Today · ${window}`;
   }
   return "Flexible";
@@ -206,7 +232,9 @@ async function offer(supabase: any, job: any, skillName: string) {
   const media = await durableMedia(supabase, job.id);
   return (inserted.data ?? [])
     .map((match: any) => {
-      const handyman = (handymen.data ?? []).find((row: any) => row.id === match.handyman_id);
+      const handyman = (handymen.data ?? []).find((row: any) =>
+        row.id === match.handyman_id
+      );
       return {
         to: handyman?.phone,
         reply: [
@@ -232,7 +260,10 @@ async function offer(supabase: any, job: any, skillName: string) {
 }
 
 async function staleAction(supabase: any, phone: string) {
-  const customer = await supabase.from("customers").select("id").eq("phone", phone).maybeSingle();
+  const customer = await supabase.from("customers").select("id").eq(
+    "phone",
+    phone,
+  ).maybeSingle();
   if (customer.error) throw customer.error;
 
   let job: any = null;
@@ -248,7 +279,8 @@ async function staleAction(supabase: any, phone: string) {
     job = latest.data;
   }
 
-  const active = job && ["open", "matching", "assigned", "in_progress"].includes(job.status);
+  const active = job &&
+    ["open", "matching", "assigned", "in_progress"].includes(job.status);
   return {
     handled: true,
     reply: active
@@ -272,8 +304,110 @@ async function staleAction(supabase: any, phone: string) {
   };
 }
 
+async function finishRequest(
+  supabase: any,
+  session: any,
+  phone: string,
+  context: any,
+) {
+  const skill = await supabase.rpc("infer_skill_for_job", {
+    p_description: context.description,
+  });
+  if (skill.error) throw skill.error;
+
+  const customer = await supabase
+    .from("customers")
+    .upsert({ phone }, { onConflict: "phone" })
+    .select("id")
+    .single();
+  if (customer.error) throw customer.error;
+
+  const job = await supabase
+    .from("jobs")
+    .insert({
+      customer_id: customer.data.id,
+      skill_id: skill.data?.skill_id,
+      description: context.description,
+      suburb: context.suburb,
+      city: context.city,
+      province: context.province,
+      urgency: context.urgency,
+      appointment_window: context.appointment_window,
+      materials_status: null,
+      street_address: null,
+      status: "matching",
+      match_attempt_count: 1,
+      last_match_attempt_at: new Date().toISOString(),
+    })
+    .select("id,description,suburb,city,urgency,appointment_window")
+    .single();
+  if (job.error) throw job.error;
+
+  let photoSaved = true;
+  if (context.photo) {
+    try {
+      await archiveMedia(
+        supabase,
+        job.data.id,
+        customer.data.id,
+        context.photo,
+      );
+    } catch (error) {
+      console.error("job media archive failed", error);
+      photoSaved = false;
+    }
+  }
+
+  const outbound = await offer(
+    supabase,
+    job.data,
+    skill.data?.skill_name ?? "handyman",
+  );
+  await updateSession(supabase, session.id, {
+    flow: "ready",
+    state: "ready",
+    context: {},
+  });
+
+  const progress = outbound.length
+    ? `I’ve contacted ${outbound.length} suitable, verified ${
+      outbound.length === 1 ? "handyman" : "handymen"
+    }.`
+    : `I’m looking for a suitable, verified handyman in ${job.data.suburb} now.`;
+  const summary = [
+    "Request live ✅",
+    job.data.description,
+    `📍 ${job.data.suburb}, ${job.data.city}`,
+    `🕒 ${timingLabel(job.data)}`,
+    "",
+    progress,
+    "You don’t need to keep checking—I’ll message you as soon as someone accepts.",
+    !photoSaved
+      ? "The photo didn’t upload, but your request is active. You can add it again below."
+      : null,
+  ].filter((line) => line !== null).join("\n");
+
+  return {
+    handled: true,
+    job_id: job.data.id,
+    reply: summary,
+    ui: {
+      type: "buttons",
+      body: summary,
+      buttons: [
+        { id: `ADD_PHOTO:${job.data.id}`, title: "Add photo" },
+        { id: `CJOB:${job.data.id}`, title: "View request" },
+        { id: "MY_JOBS", title: "My jobs" },
+      ],
+    },
+    outbound,
+  };
+}
+
 Deno.serve(async (request) => {
-  if (request.method !== "POST") return json({ error: "method_not_allowed" }, 405);
+  if (request.method !== "POST") {
+    return json({ error: "method_not_allowed" }, 405);
+  }
 
   const secret = key();
   const url = Deno.env.get("SUPABASE_URL") ?? "";
@@ -293,7 +427,11 @@ Deno.serve(async (request) => {
   if (!phone) return json({ handled: false });
 
   const supabase = createClient(url, secret, {
-    auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false },
+    auth: {
+      persistSession: false,
+      autoRefreshToken: false,
+      detectSessionInUrl: false,
+    },
   });
 
   try {
@@ -330,8 +468,53 @@ Deno.serve(async (request) => {
       }
       return json({
         handled: true,
-        reply: "What needs fixing? Describe the problem in a sentence. You can also attach a photo.",
+        reply: "What needs fixing? Describe the problem in one sentence.",
       });
+    }
+
+    if (message.startsWith("ADD_PHOTO:")) {
+      const jobId = message.slice(10);
+      const customer = await supabase.from("customers").select("id").eq(
+        "phone",
+        phone,
+      ).maybeSingle();
+      if (customer.error) throw customer.error;
+      const job = customer.data?.id
+        ? await supabase
+          .from("jobs")
+          .select("id")
+          .eq("id", jobId)
+          .eq("customer_id", customer.data.id)
+          .in("status", ["open", "matching", "assigned", "in_progress"])
+          .maybeSingle()
+        : { data: null, error: null };
+      if (job.error) throw job.error;
+      if (!job.data) return json(await staleAction(supabase, phone));
+
+      if (!session) {
+        const inserted = await supabase.from("conversation_sessions").insert({
+          channel: input.channel ?? "whatsapp",
+          external_user_id: phone,
+          flow: "job_intake",
+          state: "ji_post_photo",
+          context: { job_id: jobId },
+        }).select("id,state,context").single();
+        if (inserted.error) throw inserted.error;
+        session = inserted.data;
+      } else {
+        await updateSession(supabase, session.id, {
+          flow: "job_intake",
+          state: "ji_post_photo",
+          context: { job_id: jobId },
+        });
+        session = {
+          ...session,
+          state: "ji_post_photo",
+          context: { job_id: jobId },
+        };
+      }
+      const ui = postPhotoUi(jobId);
+      return json({ handled: true, reply: ui.body, ui });
     }
 
     const active = session && String(session.state).startsWith("ji_");
@@ -347,10 +530,16 @@ Deno.serve(async (request) => {
         await updateSession(supabase, session.id, {
           context: { ...context, photo: input.media },
         });
-        return json({ handled: true, reply: "Photo received. Now tell me what needs fixing." });
+        return json({
+          handled: true,
+          reply: "Photo received. Now tell me what needs fixing.",
+        });
       }
       if (message.length < 3 || message === "H_MEDIA_UPLOAD") {
-        return json({ handled: true, reply: "Please describe the problem in a few words." });
+        return json({
+          handled: true,
+          reply: "Please describe the problem in a few words.",
+        });
       }
       context = {
         description: message,
@@ -362,28 +551,36 @@ Deno.serve(async (request) => {
       });
       return json({
         handled: true,
-        reply: "Which area is the job in? Send suburb and city. Example: Langa, Cape Town",
+        reply:
+          "Which area is the job in? Send suburb and city. Example: Langa, Cape Town",
       });
     }
 
     if (session.state === "ji_urgency") {
-      const timing: Record<string, { urgency: string; appointment_window: string | null }> = {
+      const timing: Record<
+        string,
+        { urgency: string; appointment_window: string | null }
+      > = {
         JI_URGENT: { urgency: "urgent", appointment_window: "any_time" },
         JI_TODAY: { urgency: "today", appointment_window: null },
         JI_FLEXIBLE: { urgency: "flexible", appointment_window: "any_time" },
       };
       const selected = timing[message];
-      if (!selected) return json({ handled: true, reply: urgencyUi.body, ui: urgencyUi });
+      if (!selected) {
+        return json({ handled: true, reply: urgencyUi.body, ui: urgencyUi });
+      }
 
       context = { ...context, urgency: selected.urgency };
       if (message === "JI_TODAY") {
-        await updateSession(supabase, session.id, { state: "ji_time", context });
+        await updateSession(supabase, session.id, {
+          state: "ji_time",
+          context,
+        });
         return json({ handled: true, reply: timeUi.body, ui: timeUi });
       }
 
       context = { ...context, appointment_window: selected.appointment_window };
-      await updateSession(supabase, session.id, { state: "ji_photo", context });
-      return json({ handled: true, reply: photoUi.body, ui: photoUi });
+      return json(await finishRequest(supabase, session, phone, context));
     }
 
     if (session.state === "ji_time") {
@@ -393,93 +590,93 @@ Deno.serve(async (request) => {
         JI_TIME_EVENING: "evening",
         JI_TIME_ANY: "any_time",
       };
-      if (!windows[message]) return json({ handled: true, reply: timeUi.body, ui: timeUi });
+      if (!windows[message]) {
+        return json({ handled: true, reply: timeUi.body, ui: timeUi });
+      }
 
       context = { ...context, appointment_window: windows[message] };
-      await updateSession(supabase, session.id, { state: "ji_photo", context });
-      return json({ handled: true, reply: photoUi.body, ui: photoUi });
+      return json(await finishRequest(supabase, session, phone, context));
     }
 
-    if (session.state === "ji_photo") {
-      if (input.media?.id) context = { ...context, photo: input.media };
-      else if (message !== "JI_SKIP_PHOTO") {
-        return json({ handled: true, reply: "Send one photo, or tap Skip.", ui: photoUi });
+    if (session.state === "ji_post_photo") {
+      const jobId = String(context.job_id ?? "");
+      if (message === `JI_CANCEL_PHOTO:${jobId}`) {
+        await updateSession(supabase, session.id, {
+          flow: "ready",
+          state: "ready",
+          context: {},
+        });
+        return json({
+          handled: true,
+          reply: "No problem. Your request is still active.",
+          ui: {
+            type: "buttons",
+            body: "What next?",
+            buttons: [
+              { id: `CJOB:${jobId}`, title: "View request" },
+              { id: "MY_JOBS", title: "My jobs" },
+            ],
+          },
+        });
+      }
+      if (!input.media?.id) {
+        const ui = postPhotoUi(jobId);
+        return json({ handled: true, reply: ui.body, ui });
       }
 
-      const skill = await supabase.rpc("infer_skill_for_job", {
-        p_description: context.description,
-      });
-      if (skill.error) throw skill.error;
-
-      const customer = await supabase
-        .from("customers")
-        .upsert({ phone }, { onConflict: "phone" })
-        .select("id")
-        .single();
+      const customer = await supabase.from("customers").select("id").eq(
+        "phone",
+        phone,
+      ).single();
       if (customer.error) throw customer.error;
-
       const job = await supabase
         .from("jobs")
-        .insert({
-          customer_id: customer.data.id,
-          skill_id: skill.data?.skill_id,
-          description: context.description,
-          suburb: context.suburb,
-          city: context.city,
-          province: context.province,
-          urgency: context.urgency,
-          appointment_window: context.appointment_window,
-          materials_status: null,
-          status: "matching",
-          match_attempt_count: 1,
-          last_match_attempt_at: new Date().toISOString(),
-        })
-        .select("id,description,suburb,city,urgency,appointment_window")
-        .single();
+        .select("id")
+        .eq("id", jobId)
+        .eq("customer_id", customer.data.id)
+        .maybeSingle();
       if (job.error) throw job.error;
+      if (!job.data) return json(await staleAction(supabase, phone));
 
-      if (context.photo) {
-        try {
-          await archiveMedia(supabase, job.data.id, customer.data.id, context.photo);
-        } catch (error) {
-          console.error("job media archive failed", error);
-          await supabase.from("jobs").delete().eq("id", job.data.id);
-          return json({
-            handled: true,
-            reply: "I could not save that file securely. Send a JPG, PNG, WebP or PDF under 10 MB, or tap Skip.",
-            ui: photoUi,
-          });
-        }
+      try {
+        await archiveMedia(supabase, jobId, customer.data.id, input.media);
+      } catch (error) {
+        console.error("job media archive failed", error);
+        const ui = postPhotoUi(jobId);
+        return json({
+          handled: true,
+          reply:
+            "I couldn’t save that photo. Send a JPG, PNG or WebP under 10 MB, or choose Not now.",
+          ui,
+        });
       }
 
-      const outbound = await offer(
-        supabase,
-        job.data,
-        skill.data?.skill_name ?? "handyman",
-      );
       await updateSession(supabase, session.id, {
         flow: "ready",
         state: "ready",
         context: {},
       });
-
       return json({
         handled: true,
-        job_id: job.data.id,
-        reply: outbound.length
-          ? `Request sent ✅\n${job.data.description}\n📍 ${job.data.suburb}, ${job.data.city}\n\nWe’re contacting ${outbound.length} suitable handyman${outbound.length === 1 ? "" : "s"}. We’ll message you when one accepts.`
-          : `Request received ✅\n${job.data.description}\n📍 ${job.data.suburb}, ${job.data.city}\n\nNo suitable handyman is available yet. We’ll keep looking and message you when that changes.`,
+        reply:
+          "Photo added ✅ It will be included when the job is offered to handymen.",
         ui: {
           type: "buttons",
-          body: "Track or manage this request",
+          body: "Your request is still active.",
           buttons: [
-            { id: `CJOB:${job.data.id}`, title: "View request" },
+            { id: `CJOB:${jobId}`, title: "View request" },
             { id: "MY_JOBS", title: "My jobs" },
-            { id: "HOME", title: "Home" },
           ],
         },
-        outbound,
       });
+    }
+
+    if (session.state === "ji_photo") {
+      if (input.media?.id) context = { ...context, photo: input.media };
+      else if (message !== "JI_SKIP_PHOTO") {
+        return json({ handled: true, reply: "Send one photo, or tap Skip." });
+      }
+      return json(await finishRequest(supabase, session, phone, context));
     }
 
     return json({ handled: false });

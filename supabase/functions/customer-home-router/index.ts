@@ -1,6 +1,10 @@
 import { createClient } from "@supabase/supabase-js";
 
-type Incoming = { channel?: string; external_user_id?: string; message?: string };
+type Incoming = {
+  channel?: string;
+  external_user_id?: string;
+  message?: string;
+};
 
 const json = (body: unknown, status = 200) =>
   new Response(JSON.stringify(body), {
@@ -22,7 +26,9 @@ function key() {
 }
 
 function homeText(name?: string) {
-  return name ? `Hi ${name} 👋\nWhat can we help with?` : "What can we help with?";
+  return name
+    ? `Hi ${name} 👋\nWhat can we help with?`
+    : "What can we help with?";
 }
 
 function home(name?: string) {
@@ -43,7 +49,6 @@ function more() {
     body: "More options",
     button: "Choose",
     rows: [
-      { id: "CUST_ADDRESSES", title: "Saved addresses" },
       { id: "CUST_PROFILE", title: "My profile" },
       { id: "CUST_HELP", title: "How it works" },
       { id: "HOME", title: "Home" },
@@ -51,7 +56,42 @@ function more() {
   };
 }
 
-async function call(url: string, secret: string, target: string, input: Incoming) {
+function activeHome(name: string | undefined, job: any) {
+  const place = [job.suburb, job.city].filter(Boolean).join(", ");
+  const status = ["matching", "open"].includes(job.status)
+    ? "🔎 I’m finding a suitable, verified handyman for:"
+    : job.status === "assigned"
+    ? "✅ A handyman has accepted:"
+    : "🛠️ Work is in progress for:";
+  const reassurance = ["matching", "open"].includes(job.status)
+    ? "You don’t need to keep checking—I’ll message you as soon as someone accepts."
+    : "Open the request for the latest status and next action.";
+  const body = [
+    name ? `Hi ${name} 👋` : "Hi 👋",
+    "",
+    status,
+    job.description,
+    place ? `📍 ${place}` : null,
+    "",
+    reassurance,
+  ].filter((line) => line !== null).join("\n");
+  return {
+    type: "buttons",
+    body,
+    buttons: [
+      { id: `CJOB:${job.id}`, title: "View request" },
+      { id: "REQUEST_HELP", title: "New request" },
+      { id: "MY_JOBS", title: "My jobs" },
+    ],
+  };
+}
+
+async function call(
+  url: string,
+  secret: string,
+  target: string,
+  input: Incoming,
+) {
   const response = await fetch(`${url}/functions/v1/${target}`, {
     method: "POST",
     headers: { apikey: secret, "content-type": "application/json" },
@@ -64,7 +104,9 @@ async function call(url: string, secret: string, target: string, input: Incoming
 }
 
 Deno.serve(async (request) => {
-  if (request.method !== "POST") return json({ error: "method_not_allowed" }, 405);
+  if (request.method !== "POST") {
+    return json({ error: "method_not_allowed" }, 405);
+  }
 
   const secret = key();
   const url = Deno.env.get("SUPABASE_URL") ?? "";
@@ -84,10 +126,17 @@ Deno.serve(async (request) => {
   if (!phone) return json({ handled: false });
 
   const supabase = createClient(url, secret, {
-    auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false },
+    auth: {
+      persistSession: false,
+      autoRefreshToken: false,
+      detectSessionInUrl: false,
+    },
   });
 
-  const handyman = await supabase.from("handymen").select("id").eq("phone", phone).maybeSingle();
+  const handyman = await supabase.from("handymen").select("id").eq(
+    "phone",
+    phone,
+  ).maybeSingle();
   if (handyman.error) throw handyman.error;
   if (handyman.data) return json({ handled: false });
 
@@ -130,7 +179,11 @@ Deno.serve(async (request) => {
     if (sessionUpdated.error) throw sessionUpdated.error;
 
     const firstName = name.split(" ")[0];
-    return json({ handled: true, reply: homeText(firstName), ui: home(firstName) });
+    return json({
+      handled: true,
+      reply: homeText(firstName),
+      ui: home(firstName),
+    });
   }
 
   const greeting = ["hi", "hello", "hey", "menu", "start", "home"].includes(
@@ -139,7 +192,8 @@ Deno.serve(async (request) => {
 
   if (greeting) {
     if (!customer.data) {
-      const inserted = await supabase.from("customers").insert({ phone }).select("id").single();
+      const inserted = await supabase.from("customers").insert({ phone })
+        .select("id").single();
       if (inserted.error) throw inserted.error;
       customer = { data: { id: inserted.data.id } };
     }
@@ -148,7 +202,11 @@ Deno.serve(async (request) => {
       if (session.data?.id) {
         const updated = await supabase
           .from("conversation_sessions")
-          .update({ flow: "customer_onboarding", state: "customer_name", context: {} })
+          .update({
+            flow: "customer_onboarding",
+            state: "customer_name",
+            context: {},
+          })
           .eq("id", session.data.id);
         if (updated.error) throw updated.error;
       } else {
@@ -167,8 +225,26 @@ Deno.serve(async (request) => {
       });
     }
 
-    const firstName = customer.data.preferred_name || String(customer.data.full_name).split(" ")[0];
-    return json({ handled: true, reply: homeText(firstName), ui: home(firstName) });
+    const firstName = customer.data.preferred_name ||
+      String(customer.data.full_name).split(" ")[0];
+    const active = await supabase
+      .from("jobs")
+      .select("id,description,suburb,city,status,created_at")
+      .eq("customer_id", customer.data.id)
+      .in("status", ["open", "matching", "assigned", "in_progress"])
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    if (active.error) throw active.error;
+    if (active.data) {
+      const ui = activeHome(firstName, active.data);
+      return json({ handled: true, reply: ui.body, ui });
+    }
+    return json({
+      handled: true,
+      reply: homeText(firstName),
+      ui: home(firstName),
+    });
   }
 
   if (
@@ -177,12 +253,16 @@ Deno.serve(async (request) => {
     message.startsWith("CJOB:") ||
     message.startsWith("CSTALE:")
   ) {
-    const result = await call(url, secret, "customer-job-history-router", input);
+    const result = await call(
+      url,
+      secret,
+      "customer-job-history-router",
+      input,
+    );
     return json(result.body, result.status);
   }
 
-  const editCommand =
-    message.startsWith("EDIT_JOB:") ||
+  const editCommand = message.startsWith("EDIT_JOB:") ||
     message.startsWith("EDITLOC:") ||
     message.startsWith("EDITSVC:") ||
     message.startsWith("ESVCPAGE:") ||
@@ -194,7 +274,11 @@ Deno.serve(async (request) => {
     const result = await call(url, secret, "customer-job-router", input);
 
     if (message.startsWith("EDIT_JOB:")) {
-      return json({ handled: true, reply: "What would you like to change?", ui: result.body?.ui }, result.status);
+      return json({
+        handled: true,
+        reply: "What would you like to change?",
+        ui: result.body?.ui,
+      }, result.status);
     }
     if (message.startsWith("EDITLOC:")) {
       return json({
@@ -210,7 +294,10 @@ Deno.serve(async (request) => {
           type: "buttons",
           body: "Request updated",
           buttons: [
-            { id: editingId ? `CJOB:${editingId}` : "MY_JOBS", title: "View request" },
+            {
+              id: editingId ? `CJOB:${editingId}` : "MY_JOBS",
+              title: "View request",
+            },
             { id: "MY_JOBS", title: "My jobs" },
             { id: "HOME", title: "Home" },
           ],
@@ -269,9 +356,13 @@ Deno.serve(async (request) => {
     return json({
       handled: true,
       reply: (addresses.data ?? []).length
-        ? `Saved addresses\n${(addresses.data ?? []).map((address: any) =>
-          `• ${address.label}${address.is_default ? " · default" : ""}: ${address.street_address}, ${address.suburb}, ${address.city}`
-        ).join("\n")}`
+        ? `Saved addresses\n${
+          (addresses.data ?? []).map((address: any) =>
+            `• ${address.label}${
+              address.is_default ? " · default" : ""
+            }: ${address.street_address}, ${address.suburb}, ${address.city}`
+          ).join("\n")
+        }`
         : "No saved addresses yet.",
       ui: {
         type: "buttons",
@@ -287,7 +378,8 @@ Deno.serve(async (request) => {
   if (message === "CUST_HELP") {
     return json({
       handled: true,
-      reply: "Describe the job, choose when you need help, and HandyConnect will contact suitable handymen. You approve the quote before work starts. Your exact address is shared only with the handyman who accepts.",
+      reply:
+        "Describe the problem, tell us the area and choose when you need help. HandyConnect then looks for a suitable, verified handyman. You approve the quote before work starts, and you only share your street address after a handyman accepts.",
       ui: {
         type: "buttons",
         body: "Ready to get help?",

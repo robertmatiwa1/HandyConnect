@@ -56,36 +56,6 @@ function more() {
   };
 }
 
-function activeHome(name: string | undefined, job: any) {
-  const place = [job.suburb, job.city].filter(Boolean).join(", ");
-  const status = ["matching", "open"].includes(job.status)
-    ? "🔎 I’m finding a suitable, verified handyman for:"
-    : job.status === "assigned"
-    ? "✅ A handyman has accepted:"
-    : "🛠️ Work is in progress for:";
-  const reassurance = ["matching", "open"].includes(job.status)
-    ? "You don’t need to keep checking—I’ll message you as soon as someone accepts."
-    : "Open the request for the latest status and next action.";
-  const body = [
-    name ? `Hi ${name} 👋` : "Hi 👋",
-    "",
-    status,
-    job.description,
-    place ? `📍 ${place}` : null,
-    "",
-    reassurance,
-  ].filter((line) => line !== null).join("\n");
-  return {
-    type: "buttons",
-    body,
-    buttons: [
-      { id: `CJOB:${job.id}`, title: "View request" },
-      { id: "REQUEST_HELP", title: "New request" },
-      { id: "MY_JOBS", title: "My jobs" },
-    ],
-  };
-}
-
 async function call(
   url: string,
   secret: string,
@@ -228,18 +198,15 @@ Deno.serve(async (request) => {
 
     const firstName = customer.data.preferred_name ||
       String(customer.data.full_name).split(" ")[0];
-    const active = await supabase
-      .from("jobs")
-      .select("id,description,suburb,city,status,created_at")
-      .eq("customer_id", customer.data.id)
-      .in("status", ["open", "matching", "assigned", "in_progress"])
-      .order("created_at", { ascending: false })
-      .limit(1)
-      .maybeSingle();
-    if (active.error) throw active.error;
-    if (active.data) {
-      const ui = activeHome(firstName, active.data);
-      return json({ handled: true, reply: ui.body, ui });
+    if (session.data?.id && session.data.state !== "ready") {
+      const cleared = await supabase.from("conversation_sessions").update({
+        flow: "ready",
+        state: "ready",
+        context: {},
+        status: "active",
+        updated_at: new Date().toISOString(),
+      }).eq("id", session.data.id);
+      if (cleared.error) throw cleared.error;
     }
     return json({
       handled: true,

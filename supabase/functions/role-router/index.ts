@@ -40,6 +40,25 @@ const chooseRoleUi = {
   ],
 };
 
+const TERMS_VERSION = "2026-08-10";
+
+function registrationUi(role: Role) {
+  const provider = role === "handyman";
+  return {
+    type: "buttons",
+    body: provider
+      ? "Create your provider profile? By continuing, you accept HandyConnect’s Terms and acknowledge the Privacy Notice. Provider access still requires verification."
+      : "Create your customer profile? By continuing, you accept HandyConnect’s Terms and acknowledge the Privacy Notice.",
+    buttons: [
+      {
+        id: provider ? "PROV_REG_ACCEPT" : "CUST_REG_ACCEPT",
+        title: "Continue",
+      },
+      { id: "REG_NOT_NOW", title: "Not now" },
+    ],
+  };
+}
+
 function customerUi() {
   return {
     type: "buttons",
@@ -113,11 +132,15 @@ Deno.serve(async (request) => {
   });
 
   const [customer, handyman, preference] = await Promise.all([
-    supabase.from("customers").select("id,full_name,preferred_name").eq(
+    supabase.from("customers").select(
+      "id,full_name,preferred_name,registration_status,terms_accepted_at",
+    ).eq(
       "phone",
       phone,
     ).maybeSingle(),
-    supabase.from("handymen").select("id,full_name").eq("phone", phone)
+    supabase.from("handymen").select(
+      "id,full_name,registration_status,terms_accepted_at,verification_status",
+    ).eq("phone", phone)
       .maybeSingle(),
     supabase.from("whatsapp_role_preferences").select("active_role").eq(
       "external_user_id",
@@ -128,6 +151,12 @@ Deno.serve(async (request) => {
   const hasCustomer = Boolean(customer.data);
   const hasHandyman = Boolean(handyman.data);
   const dualRole = hasCustomer && hasHandyman;
+  const customerReady = hasCustomer &&
+    customer.data.registration_status === "active" &&
+    Boolean(customer.data.terms_accepted_at);
+  const handymanReady = hasHandyman &&
+    handyman.data.registration_status === "active" &&
+    Boolean(handyman.data.terms_accepted_at);
 
   async function setRole(role: Role) {
     await supabase.from("whatsapp_role_preferences").upsert(
@@ -141,8 +170,21 @@ Deno.serve(async (request) => {
   }
 
   if (message === "ROLE_USE_CUSTOMER" || message === "SWITCH_CUSTOMER") {
-    if (!hasCustomer) await supabase.from("customers").insert({ phone });
+    if (!hasCustomer) {
+      const created = await supabase.from("customers").insert({
+        phone,
+        registration_status: "onboarding",
+      });
+      if (created.error) throw created.error;
+    }
     await setRole("customer");
+    if (!customerReady) {
+      return json({
+        handled: true,
+        reply: "Registration is required before requesting or managing jobs.",
+        ui: registrationUi("customer"),
+      });
+    }
     return json({
       handled: true,
       reply: message === "SWITCH_CUSTOMER"
@@ -154,11 +196,12 @@ Deno.serve(async (request) => {
 
   if (message === "ROLE_USE_HANDYMAN" || message === "SWITCH_HANDYMAN") {
     await setRole("handyman");
-    if (!hasHandyman) {
+    if (!handymanReady) {
       return json({
         handled: true,
-        delegate: "conversation-engine",
-        delegate_message: "ROLE_HANDYMAN",
+        reply:
+          "Provider registration and verification are required before receiving jobs.",
+        ui: registrationUi("handyman"),
       });
     }
     return json({
@@ -167,6 +210,70 @@ Deno.serve(async (request) => {
         ? "Switched to provider mode."
         : "Provider mode selected.",
       ui: handymanUi(hasCustomer),
+    });
+  }
+
+  if (message === "REG_NOT_NOW") {
+    return json({
+      handled: true,
+      reply: "No profile was activated. Send Hi whenever you’re ready.",
+      ui: chooseRoleUi,
+    });
+  }
+
+  if (message === "CUST_REG_ACCEPT") {
+    const acceptedAt = new Date().toISOString();
+    const saved = await supabase.from("customers").upsert({
+      phone,
+      registration_status: customer.data?.full_name ? "active" : "onboarding",
+      terms_accepted_at: acceptedAt,
+      terms_version: TERMS_VERSION,
+      updated_at: acceptedAt,
+    }, { onConflict: "phone" }).select("id,full_name,preferred_name").single();
+    if (saved.error) throw saved.error;
+    await setRole("customer");
+    if (saved.data.full_name) {
+      return json({
+        handled: true,
+        reply: "Customer profile activated.",
+        delegate: "customer-home-router",
+        delegate_message: "HOME",
+      });
+    }
+    const session = await supabase.from("conversation_sessions").upsert({
+      channel: input.channel ?? "whatsapp",
+      external_user_id: phone,
+      flow: "customer_onboarding",
+      state: "customer_name",
+      context: {},
+      status: "active",
+    }, { onConflict: "channel,external_user_id" });
+    if (session.error) throw session.error;
+    return json({ handled: true, reply: "What name should I call you?" });
+  }
+
+  if (message === "PROV_REG_ACCEPT") {
+    await setRole("handyman");
+    if (hasHandyman) {
+      const acceptedAt = new Date().toISOString();
+      const saved = await supabase.from("handymen").update({
+        registration_status: "active",
+        terms_accepted_at: acceptedAt,
+        terms_version: TERMS_VERSION,
+        updated_at: acceptedAt,
+      }).eq("id", handyman.data.id);
+      if (saved.error) throw saved.error;
+      return json({
+        handled: true,
+        reply:
+          "Provider profile activated. Verification is still required before receiving jobs.",
+        ui: handymanUi(hasCustomer),
+      });
+    }
+    return json({
+      handled: true,
+      delegate: "conversation-engine",
+      delegate_message: "ROLE_HANDYMAN_TERMS_ACCEPTED",
     });
   }
 
@@ -187,6 +294,20 @@ Deno.serve(async (request) => {
   }
 
   if (!isGreeting(message)) {
+    if (activeRole === "customer" && !customerReady) {
+      return json({
+        handled: true,
+        reply: "Please finish customer registration first.",
+        ui: registrationUi("customer"),
+      });
+    }
+    if (activeRole === "handyman" && !handymanReady) {
+      return json({
+        handled: true,
+        reply: "Please finish provider registration first.",
+        ui: registrationUi("handyman"),
+      });
+    }
     return json({ handled: false, active_role: activeRole });
   }
 
@@ -199,11 +320,26 @@ Deno.serve(async (request) => {
   }
 
   if (activeRole === "handyman") {
+    if (!handymanReady) {
+      return json({
+        handled: true,
+        reply: "Finish provider registration to use the provider dashboard.",
+        ui: registrationUi("handyman"),
+      });
+    }
     const firstName = handyman.data?.full_name?.split(" ")[0];
     return json({
       handled: true,
       reply: firstName ? `Hi ${firstName} 👋` : "Hi 👋",
       ui: handymanUi(hasCustomer),
+    });
+  }
+
+  if (!customerReady) {
+    return json({
+      handled: true,
+      reply: "Finish customer registration to request or manage jobs.",
+      ui: registrationUi("customer"),
     });
   }
 

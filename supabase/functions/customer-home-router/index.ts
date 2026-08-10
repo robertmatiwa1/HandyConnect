@@ -166,6 +166,7 @@ Deno.serve(async (request) => {
       .update({
         full_name: name,
         preferred_name: name.split(" ")[0],
+        registration_status: "active",
         onboarding_completed_at: new Date().toISOString(),
         updated_at: new Date().toISOString(),
       })

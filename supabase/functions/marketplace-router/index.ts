@@ -156,85 +156,259 @@ async function customerJobs(s: any, customerId: string) {
     },
   };
 }
-async function handymanJobs(s: any, handymanId: string) {
-  const offers = await s.from("job_matches").select(
-    "id,job_id,status,offered_at",
-  ).eq("handyman_id", handymanId).eq("status", "offered").order("offered_at", {
-    ascending: false,
-  }).limit(5);
-  const assignments = await s.from("job_assignments").select(
-    "job_id,assigned_at,started_at,completed_at,cancelled_at",
-  ).eq("handyman_id", handymanId).is("cancelled_at", null).order(
-    "assigned_at",
-    { ascending: false },
-  ).limit(5);
-  if (offers.error || assignments.error) {
-    throw offers.error ?? assignments.error;
-  }
-  const ids = [
-    ...new Set([
-      ...(offers.data ?? []).map((x: any) => x.job_id),
-      ...(assignments.data ?? []).map((x: any) => x.job_id),
-    ]),
-  ];
-  if (!ids.length) {
+async function providerCapacity(s: any, handymanId: string) {
+  const q = await s.from("handymen").select(
+    "id,active_job_id,availability_status,availability_cooldown_until",
+  ).eq("id", handymanId).single();
+  if (q.error) throw q.error;
+  return q.data;
+}
+async function handymanCurrentJob(s: any, handymanId: string) {
+  const h = await providerCapacity(s, handymanId);
+  if (!h.active_job_id) {
+    const scheduled = await s.from("job_assignments").select(
+      "job_id,assigned_at",
+    ).eq("handyman_id", handymanId).eq("assignment_kind", "scheduled").is(
+      "cancelled_at",
+      null,
+    ).is("completed_at", null).order("assigned_at", { ascending: true }).limit(
+      1,
+    ).maybeSingle();
+    if (scheduled.error) throw scheduled.error;
+    if (scheduled.data?.job_id) {
+      return handymanJob(s, handymanId, scheduled.data.job_id);
+    }
     return {
       ok: true,
-      reply: "You don't have any active job offers or jobs yet.",
+      reply: "You do not have an immediate job in progress.",
       ui: {
         type: "buttons",
-        body: "Handyman dashboard",
-        buttons: [{ id: "HANDYMAN_HOME", title: "Dashboard" }],
+        body: "What would you like to do?",
+        buttons: [{ id: "H_NEW", title: "New jobs" }, {
+          id: "H_HISTORY",
+          title: "Job history",
+        }, { id: "HANDYMAN_HOME", title: "Dashboard" }],
       },
     };
   }
-  const jobs = await s.from("jobs").select("id,description,suburb,city,status")
-    .in("id", ids);
-  const jm = new Map((jobs.data ?? []).map((j: any) => [j.id, j]));
-  const rows: Row[] = [];
-  for (const o of offers.data ?? []) {
-    const j: any = jm.get(o.job_id);
-    if (j) {
-      rows.push({
+  return handymanJob(s, handymanId, h.active_job_id);
+}
+async function handymanNewJobs(s: any, handymanId: string) {
+  const h = await providerCapacity(s, handymanId);
+  const offers = await s.from("job_matches").select(
+    "id,job_id,offered_at,offer_expires_at",
+  ).eq("handyman_id", handymanId).eq("status", "offered").or(
+    `offer_expires_at.is.null,offer_expires_at.gt.${new Date().toISOString()}`,
+  ).order("offered_at", { ascending: false }).limit(9);
+  if (offers.error) throw offers.error;
+  const ids = (offers.data ?? []).map((x: any) => x.job_id);
+  const jobs = ids.length
+    ? await s.from("jobs").select(
+      "id,description,suburb,city,status,service_mode,scheduled_start_at",
+    ).in("id", ids).in("status", ["open", "matching"])
+    : { data: [], error: null };
+  if (jobs.error) throw jobs.error;
+  const byId = new Map((jobs.data ?? []).map((j: any) => [j.id, j]));
+  const rows = (offers.data ?? []).flatMap((o: any) => {
+    const j: any = byId.get(o.job_id);
+    return j
+      ? [{
         id: `HJOB_MATCH:${o.id}`,
         title: short(j.description),
-        description: `Offer · ${j.suburb}, ${j.city}`,
-      });
-    }
-  }
-  for (const a of assignments.data ?? []) {
-    const j: any = jm.get(a.job_id);
-    if (j && !["completed", "cancelled", "expired"].includes(j.status)) {
-      rows.push({
-        id: `HJOB_JOB:${j.id}`,
-        title: short(j.description),
-        description: `${j.status} · ${j.suburb}, ${j.city}`,
-      });
-    }
-  }
-  return rows.length
-    ? {
+        description: `${
+          j.service_mode === "scheduled" ? "Scheduled" : "New"
+        } · ${[j.suburb, j.city].filter(Boolean).join(", ")}`,
+      }]
+      : [];
+  });
+  const busyText = h.active_job_id
+    ? " You may browse, but another immediate job cannot be accepted until Current job is released."
+    : "";
+  if (!rows.length) {
+    return {
       ok: true,
-      reply: "Choose an offer or active job.",
+      reply: `There are no open matching offers for you right now.${busyText}`,
       ui: {
-        type: "list",
-        body: "My jobs",
-        button: "Choose job",
-        rows: [...rows.slice(0, 9), {
+        type: "buttons",
+        body: "New jobs",
+        buttons: h.active_job_id
+          ? [{ id: "H_CURRENT", title: "Current job" }, {
+            id: "HANDYMAN_HOME",
+            title: "Dashboard",
+          }]
+          : [{ id: "H_AVAIL", title: "Availability" }, {
+            id: "HANDYMAN_HOME",
+            title: "Dashboard",
+          }],
+      },
+    };
+  }
+  return {
+    ok: true,
+    reply: `${rows.length} matching job${
+      rows.length === 1 ? "" : "s"
+    }.${busyText}`,
+    ui: {
+      type: "list",
+      body: h.active_job_id ? "New jobs · acceptance locked" : "New jobs",
+      button: "View job",
+      rows: [...rows, { id: "HANDYMAN_HOME", title: "Dashboard" }].slice(0, 10),
+    },
+  };
+}
+async function handymanOffer(s: any, handymanId: string, matchId: string) {
+  const h = await providerCapacity(s, handymanId);
+  const offer = await s.from("job_matches").select(
+    "id,job_id,status,offer_expires_at",
+  ).eq("id", matchId).eq("handyman_id", handymanId).maybeSingle();
+  if (offer.error) throw offer.error;
+  if (
+    !offer.data || offer.data.status !== "offered" ||
+    (offer.data.offer_expires_at &&
+      new Date(offer.data.offer_expires_at) <= new Date())
+  ) {
+    return {
+      ok: true,
+      reply: "That job is no longer available.",
+      ui: {
+        type: "buttons",
+        body: "New jobs",
+        buttons: [{ id: "H_NEW", title: "Next job" }, {
           id: "HANDYMAN_HOME",
           title: "Dashboard",
         }],
       },
-    }
-    : {
+    };
+  }
+  const job = await s.from("jobs").select(
+    "id,description,suburb,city,urgency,appointment_window,service_mode,scheduled_start_at,status",
+  ).eq("id", offer.data.job_id).maybeSingle();
+  if (job.error) throw job.error;
+  if (!job.data || !["open", "matching"].includes(job.data.status)) {
+    return handymanNewJobs(s, handymanId);
+  }
+  const when = job.data.service_mode === "scheduled" &&
+      job.data.scheduled_start_at
+    ? new Intl.DateTimeFormat("en-ZA", {
+      timeZone: "Africa/Johannesburg",
+      dateStyle: "medium",
+      timeStyle: "short",
+    }).format(new Date(job.data.scheduled_start_at))
+    : job.data.urgency === "urgent"
+    ? "As soon as possible"
+    : job.data.urgency === "today"
+    ? `Today · ${
+      String(job.data.appointment_window ?? "any time").replaceAll("_", " ")
+    }`
+    : "Flexible";
+  return {
+    ok: true,
+    reply: `${job.data.description}\n📍 ${
+      [job.data.suburb, job.data.city].filter(Boolean).join(", ")
+    }\nWhen: ${when}${
+      h.active_job_id && job.data.service_mode === "immediate"
+        ? "\n\nAcceptance is locked while Current job is active."
+        : ""
+    }`,
+    ui: {
+      type: "buttons",
+      body: "Job options",
+      buttons: h.active_job_id && job.data.service_mode === "immediate"
+        ? [{ id: "H_CURRENT", title: "Current job" }, {
+          id: "H_NEW",
+          title: "Next job",
+        }, { id: "HANDYMAN_HOME", title: "Dashboard" }]
+        : [{ id: `ACCEPT:${matchId}`, title: "Accept" }, {
+          id: `DECLINE:${matchId}`,
+          title: "Skip",
+        }, { id: "H_NEW", title: "Next job" }],
+    },
+  };
+}
+async function handymanHistory(s: any, handymanId: string) {
+  const assignments = await s.from("job_assignments").select(
+    "id,job_id,assigned_at,completed_at,cancelled_at,cancellation_reason",
+  ).eq("handyman_id", handymanId).order("assigned_at", { ascending: false })
+    .limit(20);
+  if (assignments.error) throw assignments.error;
+  const closed = (assignments.data ?? []).filter((a: any) =>
+    a.completed_at || a.cancelled_at
+  ).slice(0, 9);
+  const ids = closed.map((a: any) => a.job_id);
+  const jobs = ids.length
+    ? await s.from("jobs").select("id,description,suburb,city").in("id", ids)
+    : { data: [], error: null };
+  if (jobs.error) throw jobs.error;
+  const byId = new Map((jobs.data ?? []).map((j: any) => [j.id, j]));
+  const rows = closed.flatMap((a: any) => {
+    const j: any = byId.get(a.job_id);
+    return j
+      ? [{
+        id: `HHIST_JOB:${a.id}`,
+        title: short(j.description),
+        description: `${a.completed_at ? "Completed" : "Cancelled"} · ${
+          j.suburb ?? j.city
+        }`,
+      }]
+      : [];
+  });
+  if (!rows.length) {
+    return {
       ok: true,
-      reply: "You don't have any active job offers or jobs yet.",
+      reply: "You do not have completed or cancelled jobs yet.",
       ui: {
         type: "buttons",
-        body: "Handyman dashboard",
+        body: "Job history",
         buttons: [{ id: "HANDYMAN_HOME", title: "Dashboard" }],
       },
     };
+  }
+  return {
+    ok: true,
+    reply: "Completed and cancelled work is kept here as a read-only record.",
+    ui: {
+      type: "list",
+      body: "Job history",
+      button: "View record",
+      rows: [...rows, { id: "HANDYMAN_HOME", title: "Dashboard" }].slice(0, 10),
+    },
+  };
+}
+async function handymanHistoryDetail(
+  s: any,
+  handymanId: string,
+  assignmentId: string,
+) {
+  const a = await s.from("job_assignments").select(
+    "id,job_id,assigned_at,started_at,completed_at,cancelled_at,cancellation_reason,cancellation_notes",
+  ).eq("id", assignmentId).eq("handyman_id", handymanId).maybeSingle();
+  if (a.error) throw a.error;
+  if (!a.data || (!a.data.completed_at && !a.data.cancelled_at)) {
+    return handymanHistory(s, handymanId);
+  }
+  const j = await s.from("jobs").select("description,suburb,city").eq(
+    "id",
+    a.data.job_id,
+  ).single();
+  if (j.error) throw j.error;
+  const result = a.data.completed_at ? "Completed" : "Cancelled";
+  const reason = a.data.cancellation_reason
+    ? `\nReason: ${String(a.data.cancellation_reason).replaceAll("_", " ")}`
+    : "";
+  return {
+    ok: true,
+    reply: `${j.data.description}\n📍 ${
+      [j.data.suburb, j.data.city].filter(Boolean).join(", ")
+    }\nResult: ${result}${reason}`,
+    ui: {
+      type: "buttons",
+      body: "History record · read only",
+      buttons: [{ id: "H_HISTORY", title: "Back to history" }, {
+        id: "HANDYMAN_HOME",
+        title: "Dashboard",
+      }],
+    },
+  };
 }
 async function handymanJob(s: any, handymanId: string, jobId: string) {
   const a = await s.from("job_assignments").select(
@@ -248,7 +422,7 @@ async function handymanJob(s: any, handymanId: string, jobId: string) {
       ui: {
         type: "buttons",
         body: "What next?",
-        buttons: [{ id: "H_JOBS", title: "My jobs" }],
+        buttons: [{ id: "H_CURRENT", title: "Current job" }],
       },
     };
   }
@@ -284,7 +458,7 @@ async function handymanJob(s: any, handymanId: string, jobId: string) {
       title: "Customer no-show",
     }, { id: `REPORT_JOB:${jobId}`, title: "Report a problem" });
   }
-  rows.push({ id: "H_JOBS", title: "Back to my jobs" }, {
+  rows.push({ id: "H_CURRENT", title: "Current job" }, {
     id: "HANDYMAN_HOME",
     title: "Dashboard",
   });
@@ -329,16 +503,66 @@ async function resolveIssue(s: any, phone: string, message: string) {
     };
   }
   if (x.reopened) await s.rpc("dispatch_marketplace_tick", { p_job_limit: 5 });
+  const handymanAction = action === "customer_no_show";
   return {
     ok: true,
     reply: x.message ?? "Job updated.",
     ui: {
       type: "buttons",
       body: "What next?",
-      buttons: [{ id: "CUSTOMER_JOBS", title: "My jobs" }, {
-        id: "H_JOBS",
-        title: "Handyman jobs",
-      }, { id: "HOME", title: "Home" }],
+      buttons: handymanAction
+        ? [{ id: "H_CURRENT", title: "Current job" }, {
+          id: "H_NEW",
+          title: "New jobs",
+        }, { id: "HANDYMAN_HOME", title: "Dashboard" }]
+        : [{ id: "CUSTOMER_JOBS", title: "My jobs" }, {
+          id: "HOME",
+          title: "Home",
+        }],
+    },
+  };
+}
+async function cancelProviderJob(
+  s: any,
+  phone: string,
+  jobId: string,
+  reason: string,
+  notes: string | null,
+) {
+  const r = await s.rpc("cancel_handyman_assignment", {
+    p_job_id: jobId,
+    p_handyman_phone: phone,
+    p_reason: reason,
+    p_notes: notes,
+  });
+  if (r.error) throw r.error;
+  if (!r.data?.ok) {
+    return {
+      ok: true,
+      reply: r.data?.code === "active_assignment_not_found"
+        ? "That job is no longer your Current job."
+        : "I could not release that job. Open Current job and try again.",
+      ui: {
+        type: "buttons",
+        body: "Current job",
+        buttons: [{ id: "H_CURRENT", title: "Current job" }, {
+          id: "HANDYMAN_HOME",
+          title: "Dashboard",
+        }],
+      },
+    };
+  }
+  await s.rpc("dispatch_marketplace_tick", { p_job_limit: 5 });
+  return {
+    ok: true,
+    reply: r.data.message,
+    ui: {
+      type: "buttons",
+      body: "What next?",
+      buttons: [{ id: "H_NEW", title: "View new jobs" }, {
+        id: "H_HISTORY",
+        title: "Job history",
+      }, { id: "HANDYMAN_HOME", title: "Dashboard" }],
     },
   };
 }
@@ -377,6 +601,34 @@ Deno.serve(async (req) => {
     const c = await s.from("customers").select("id").eq("phone", phone)
       .maybeSingle();
     if (h.error || c.error) throw h.error ?? c.error;
+    if (h.data && session.data?.state === "handyman_cancel_other_reason") {
+      if (message === "HANDYMAN_HOME") {
+        await s.from("conversation_sessions").update({
+          state: "ready",
+          context: {},
+        }).eq("id", session.data.id);
+      } else {
+        const jobId = String(session.data.context?.job_id ?? "");
+        if (message.length < 3) {
+          return json({
+            ok: true,
+            reply: "Please briefly explain why you cannot attend this job.",
+          });
+        }
+        const result = await cancelProviderJob(
+          s,
+          phone,
+          jobId,
+          "other",
+          message,
+        );
+        await s.from("conversation_sessions").update({
+          state: "ready",
+          context: {},
+        }).eq("id", session.data.id);
+        return json(result);
+      }
+    }
     if (h.data && session.data?.state === "quote_capture") {
       const amount = parseAmount(message);
       if (!amount) {
@@ -404,12 +656,133 @@ Deno.serve(async (req) => {
         ui: {
           type: "buttons",
           body: "What next?",
-          buttons: [{ id: "H_JOBS", title: "My jobs" }, {
+          buttons: [{ id: "H_CURRENT", title: "Current job" }, {
             id: "HANDYMAN_HOME",
             title: "Dashboard",
           }],
         },
       });
+    }
+    if (h.data && message.startsWith("ACCEPT:")) {
+      const r = await s.rpc("accept_job_transaction", {
+        p_match_id: message.slice(7),
+        p_handyman_phone: phone,
+      });
+      if (r.error) throw r.error;
+      if (!r.data?.ok) {
+        const code = r.data?.code;
+        if (code === "provider_busy") {
+          return json({
+            ok: true,
+            reply:
+              "You already have an immediate Current job. You may browse New jobs, but cannot accept another immediate job until Current job is completed or cancelled.",
+            ui: {
+              type: "buttons",
+              body: "Acceptance locked",
+              buttons: [{ id: "H_CURRENT", title: "Current job" }, {
+                id: "H_NEW",
+                title: "New jobs",
+              }, { id: "HANDYMAN_HOME", title: "Dashboard" }],
+            },
+          });
+        }
+        if (code === "provider_cooldown") {
+          return json({
+            ok: true,
+            reply:
+              "New job acceptance is temporarily paused after your cancellation. Availability unlocks automatically when the cool-down ends.",
+            ui: {
+              type: "buttons",
+              body: "Acceptance paused",
+              buttons: [{ id: "H_AVAIL", title: "Availability" }, {
+                id: "H_NEW",
+                title: "New jobs",
+              }, { id: "HANDYMAN_HOME", title: "Dashboard" }],
+            },
+          });
+        }
+        return json({
+          ok: true,
+          reply: code === "provider_not_verified"
+            ? "Identity verification is required before accepting jobs."
+            : "That job is no longer available. Here are your remaining offers.",
+          ui: {
+            type: "buttons",
+            body: "New jobs",
+            buttons: [{ id: "H_NEW", title: "Next job" }, {
+              id: "HANDYMAN_HOME",
+              title: "Dashboard",
+            }],
+          },
+        });
+      }
+      return json({
+        ok: true,
+        reply: r.data.replayed
+          ? "This job is already saved under Current job."
+          : "Job accepted and saved under Current job.",
+        ui: {
+          type: "buttons",
+          body: "What would you like to do?",
+          buttons: [{ id: "H_CURRENT", title: "Manage job" }, {
+            id: "H_NEW",
+            title: "View new jobs",
+          }, { id: "HANDYMAN_HOME", title: "Dashboard" }],
+        },
+        assignment_id: r.data.assignment_id,
+        job_id: r.data.job_id,
+      });
+    }
+    if (h.data && message.startsWith("DECLINE:")) {
+      const id = message.slice(8);
+      const d = await s.from("job_matches").update({
+        status: "declined",
+        responded_at: new Date().toISOString(),
+      }).eq("id", id).eq("handyman_id", h.data.id).eq("status", "offered");
+      if (d.error) throw d.error;
+      return json(await handymanNewJobs(s, h.data.id));
+    }
+    if (h.data && message.startsWith("ISSUE:handyman_cancel:")) {
+      const jobId = message.slice("ISSUE:handyman_cancel:".length);
+      return json({
+        ok: true,
+        reply:
+          "Why can you no longer attend? The customer will be rematched. A provider cancellation starts a 30-minute acceptance cool-down.",
+        ui: {
+          type: "list",
+          body: "Choose the main reason",
+          button: "Choose reason",
+          rows: [{
+            id: `H_CANCEL_REASON:${jobId}:schedule_conflict`,
+            title: "Schedule conflict",
+          }, {
+            id: `H_CANCEL_REASON:${jobId}:personal_emergency`,
+            title: "Personal emergency",
+          }, {
+            id: `H_CANCEL_REASON:${jobId}:outside_skill`,
+            title: "Cannot do this job",
+          }, {
+            id: `H_CANCEL_REASON:${jobId}:other`,
+            title: "Other reason",
+          }, { id: "H_CURRENT", title: "Keep job" }],
+        },
+      });
+    }
+    if (h.data && message.startsWith("H_CANCEL_REASON:")) {
+      const [, jobId, reason] = message.split(":");
+      if (reason === "other") {
+        if (session.data?.id) {
+          await s.from("conversation_sessions").update({
+            state: "handyman_cancel_other_reason",
+            context: { job_id: jobId },
+          }).eq("id", session.data.id);
+        }
+        return json({
+          ok: true,
+          reply: "Briefly explain why you cannot attend this job.",
+        });
+      }
+      return json(await cancelProviderJob(s, phone, jobId, reason, null));
     }
     if (message.startsWith("ISSUE:")) {
       return json(await resolveIssue(s, phone, message));
@@ -480,8 +853,8 @@ Deno.serve(async (req) => {
             type: "buttons",
             body: "Price agreement",
             buttons: [{ id: `QUOTE_NEW:${jobId}`, title: "Send quote" }, {
-              id: "H_JOBS",
-              title: "My jobs",
+              id: "H_CURRENT",
+              title: "Current job",
             }],
           },
         });
@@ -497,7 +870,7 @@ Deno.serve(async (req) => {
         ui: {
           type: "buttons",
           body: "Waiting for customer confirmation",
-          buttons: [{ id: "H_JOBS", title: "My jobs" }, {
+          buttons: [{ id: "H_CURRENT", title: "Current job" }, {
             id: "HANDYMAN_HOME",
             title: "Dashboard",
           }],
@@ -543,7 +916,7 @@ Deno.serve(async (req) => {
         ui: {
           type: "buttons",
           body: "Waiting for customer confirmation",
-          buttons: [{ id: "H_JOBS", title: "My jobs" }, {
+          buttons: [{ id: "H_CURRENT", title: "Current job" }, {
             id: "HANDYMAN_HOME",
             title: "Dashboard",
           }],
@@ -640,15 +1013,55 @@ Deno.serve(async (req) => {
         },
       });
     }
-    if (h.data && (message === "H_JOBS" || message === "MY_JOBS")) {
-      return json(await handymanJobs(s, h.data.id));
+    if (
+      h.data &&
+      (message === "H_CURRENT" || message === "H_JOBS" ||
+        message === "MY_JOBS")
+    ) {
+      return json(await handymanCurrentJob(s, h.data.id));
+    }
+    if (h.data && message === "H_NEW") {
+      return json(await handymanNewJobs(s, h.data.id));
+    }
+    if (h.data && message === "H_HISTORY") {
+      return json(await handymanHistory(s, h.data.id));
+    }
+    if (h.data && message.startsWith("HJOB_MATCH:")) {
+      return json(
+        await handymanOffer(s, h.data.id, message.slice("HJOB_MATCH:".length)),
+      );
     }
     if (h.data && message.startsWith("HJOB_JOB:")) {
       return json(await handymanJob(s, h.data.id, message.slice(9)));
     }
+    if (h.data && message.startsWith("HHIST_JOB:")) {
+      return json(
+        await handymanHistoryDetail(
+          s,
+          h.data.id,
+          message.slice("HHIST_JOB:".length),
+        ),
+      );
+    }
+    if (h.data && message.startsWith("START:")) {
+      return json({
+        ok: true,
+        reply:
+          "For safety, work starts only after the quote is accepted, you mark arrival, and the customer confirms the start.",
+        ui: {
+          type: "buttons",
+          body: "Current job",
+          buttons: [{ id: "H_CURRENT", title: "Manage job" }, {
+            id: "HANDYMAN_HOME",
+            title: "Dashboard",
+          }],
+        },
+      });
+    }
     const explicitHandyman = !!input.media || message === "HANDYMAN_HOME" ||
       message.startsWith("H_") || message === "MY_JOBS" ||
-      message.startsWith("HJOB_") || message.startsWith("ACCEPT:") ||
+      message.startsWith("HJOB_") || message.startsWith("HHIST_") ||
+      message.startsWith("ACCEPT:") ||
       message.startsWith("DECLINE:") || message.startsWith("START:") ||
       message.startsWith("COMPLETE:") || message.startsWith("QUOTE_");
     const target = h.data && (explicitHandyman || !c.data)

@@ -36,8 +36,29 @@ This is deliberately simple. Distance, response rate, rating and availability ca
 
 ## Assignment
 
-`accept_job_match(match_id)` locks the match and job in one database transaction. The first valid acceptance creates the unique assignment, marks competing offers lost, and marks the job assigned. This prevents double assignment under concurrency.
+`accept_job_transaction(match_id, handyman_phone)` locks the offer, job and
+provider in one database transaction. The first valid acceptance creates the
+unique assignment, marks competing offers lost and marks the job assigned.
+
+For immediate jobs, `handymen.active_job_id` is the provider's capacity lease.
+A partial unique index permits only one active immediate assignment per provider.
+Assignment triggers set the provider to busy and release capacity only when the
+job is completed or cancelled. The availability RPC and a database trigger both
+reject attempts to override busy.
+
+Scheduled jobs are recorded as scheduled assignments without consuming immediate
+capacity. Provider cancellations record a reason and cool-down. Customer
+completion, cancellation and administrative force-release all converge on the
+same database release triggers.
 
 ## Security
 
-All application tables have RLS enabled and are closed to public clients by default. Privileged RPC functions are revoked from `PUBLIC`, `anon` and `authenticated`, and granted only to `service_role`. The public Edge Function endpoint uses an API secret-key check because it is an internal engine; the eventual WhatsApp webhook will instead validate Meta's webhook signature.
+All application tables have RLS enabled and are closed to public clients by
+default. Privileged RPC functions are revoked from `PUBLIC`, `anon` and
+`authenticated`, and granted only to `service_role`. Operational views use
+`security_invoker` and are service-only.
+
+The external WhatsApp webhook does not use Supabase user authentication; it
+validates Meta's `X-Hub-Signature-256` over the raw request body. Internal Edge
+Functions currently authenticate service-to-service calls with the configured
+Supabase secret key.

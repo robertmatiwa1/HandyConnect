@@ -1,71 +1,10 @@
 create table if not exists public.dispute_cases(
- id uuid primary key default gen_random_uuid(),
- report_id uuid not null unique references public.user_reports(id),
- job_id uuid not null references public.jobs(id),
- status text not null default 'open' check(status in ('open','reviewing','awaiting_information','decided','closed')),
- outcome text check(outcome is null or outcome in ('report_upheld','report_not_upheld','partially_upheld','inconclusive','resolved_between_parties')),
- decision_reason text,
- assigned_to text,
- opened_at timestamptz not null default now(),
- updated_at timestamptz not null default now(),
- decided_at timestamptz,
- closed_at timestamptz,
- decided_by text
-);
-create table if not exists public.dispute_case_events(
- id uuid primary key default gen_random_uuid(),
- case_id uuid not null references public.dispute_cases(id),
- event_type text not null,
- actor text not null,
- note text,
- metadata jsonb not null default '{}'::jsonb,
- created_at timestamptz not null default now()
-);
-create index if not exists idx_dispute_cases_status on public.dispute_cases(status,opened_at);
-create index if not exists idx_dispute_case_events_case on public.dispute_case_events(case_id,created_at);
-
-create or replace function public.open_dispute_case(p_report_id uuid,p_actor text default 'ops') returns uuid language plpgsql security definer set search_path=public as $$
-declare v_id uuid; v_job uuid;begin
- select job_id into v_job from user_reports where id=p_report_id; if v_job is null then raise exception 'report_not_found'; end if;
- insert into dispute_cases(report_id,job_id,status) values(p_report_id,v_job,'open') on conflict(report_id) do update set updated_at=now() returning id into v_id;
- update user_reports set status='reviewing' where id=p_report_id and status='open';
- insert into dispute_case_events(case_id,event_type,actor,note) values(v_id,'case_opened',coalesce(nullif(trim(p_actor),''),'ops'),'Formal review opened') on conflict do nothing;
- insert into job_events(job_id,event_type,actor_type,metadata) values(v_job,'dispute_case_opened','admin',jsonb_build_object('case_id',v_id,'report_id',p_report_id));
- return v_id;end $$;
-
-create or replace function public.update_dispute_case(p_case_id uuid,p_status text,p_actor text,p_note text default null) returns void language plpgsql security definer set search_path=public as $$
-begin
- if p_status not in ('open','reviewing','awaiting_information') then raise exception 'invalid_review_status'; end if;
- update dispute_cases set status=p_status,updated_at=now() where id=p_case_id; if not found then raise exception 'case_not_found'; end if;
- insert into dispute_case_events(case_id,event_type,actor,note,metadata) values(p_case_id,'status_changed',p_actor,p_note,jsonb_build_object('status',p_status));
-end $$;
-
-create or replace function public.decide_dispute_case(p_case_id uuid,p_outcome text,p_reason text,p_actor text,p_apply_handyman_consequence boolean default false) returns void language plpgsql security definer set search_path=public as $$
-declare v_report uuid;v_job uuid;v_handyman uuid;begin
- if p_outcome not in ('report_upheld','report_not_upheld','partially_upheld','inconclusive','resolved_between_parties') then raise exception 'invalid_outcome'; end if;
- if nullif(trim(p_reason),'') is null then raise exception 'decision_reason_required'; end if;
- select report_id,job_id into v_report,v_job from dispute_cases where id=p_case_id for update; if v_report is null then raise exception 'case_not_found'; end if;
- update dispute_cases set status='closed',outcome=p_outcome,decision_reason=trim(p_reason),decided_at=now(),closed_at=now(),decided_by=p_actor,updated_at=now() where id=p_case_id;
- update user_reports set status='resolved',resolved_at=now(),resolution_notes=trim(p_reason),resolved_by=p_actor where id=v_report;
- insert into dispute_case_events(case_id,event_type,actor,note,metadata) values(p_case_id,'case_decided',p_actor,trim(p_reason),jsonb_build_object('outcome',p_outcome,'handyman_consequence_requested',p_apply_handyman_consequence));
- insert into job_events(job_id,event_type,actor_type,metadata) values(v_job,'dispute_case_decided','admin',jsonb_build_object('case_id',p_case_id,'report_id',v_report,'outcome',p_outcome));
- if p_apply_handyman_consequence and p_outcome in ('report_upheld','partially_upheld') then
-   select reported_handyman_id into v_handyman from user_reports where id=v_report;
-   if v_handyman is not null then insert into reliability_events(subject_type,subject_id,event_type,job_id,metadata) values('handyman',v_handyman,'upheld_dispute',v_job,jsonb_build_object('case_id',p_case_id,'report_id',v_report,'outcome',p_outcome)); end if;
- end if;
-end $$;
-
-revoke all on function public.open_dispute_case(uuid,text) from public,anon,authenticated;
-revoke all on function public.update_dispute_case(uuid,text,text,text) from public,anon,authenticated;
-revoke all on function public.decide_dispute_case(uuid,text,text,text,boolean) from public,anon,authenticated;
-grant execute on function public.open_dispute_case(uuid,text) to service_role;
-grant execute on function public.update_dispute_case(uuid,text,text,text) to service_role;
-grant execute on function public.decide_dispute_case(uuid,text,text,text,boolean) to service_role;
-
-create or replace view public.dispute_case_ops as
-select d.id,d.report_id,d.job_id,d.status,d.outcome,d.decision_reason,d.assigned_to,d.opened_at,d.updated_at,d.decided_at,d.closed_at,d.decided_by,
-r.reporter_phone,r.reason report_reason,r.details report_details,j.description job_description,j.status job_status,j.suburb,j.city,
-h.full_name reported_handyman,h.phone reported_handyman_phone,c.full_name reported_customer,c.phone reported_customer_phone,
-(select count(*) from job_evidence e where e.job_id=d.job_id and (e.report_id=d.report_id or e.report_id is null)) evidence_count
-from dispute_cases d join user_reports r on r.id=d.report_id join jobs j on j.id=d.job_id left join handymen h on h.id=r.reported_handyman_id left join customers c on c.id=r.reported_customer_id;
+ id uuid primary key default gen_random_uuid(),report_id uuid not null unique references public.user_reports(id),job_id uuid not null references public.jobs(id),status text not null default 'open' check(status in ('open','reviewing','awaiting_information','decided','closed')),outcome text check(outcome is null or outcome in ('report_upheld','report_not_upheld','partially_upheld','inconclusive','resolved_between_parties')),decision_reason text,assigned_to text,opened_at timestamptz not null default now(),updated_at timestamptz not null default now(),decided_at timestamptz,closed_at timestamptz,decided_by text);
+create table if not exists public.dispute_case_events(id uuid primary key default gen_random_uuid(),case_id uuid not null references public.dispute_cases(id),event_type text not null,actor text not null,note text,metadata jsonb not null default '{}'::jsonb,created_at timestamptz not null default now());
+create index if not exists idx_dispute_cases_status on public.dispute_cases(status,opened_at);create index if not exists idx_dispute_case_events_case on public.dispute_case_events(case_id,created_at);
+create or replace function public.open_dispute_case(p_report_id uuid,p_actor text default 'ops') returns uuid language plpgsql security definer set search_path=public as $$ declare v_id uuid;v_job uuid;v_new boolean:=false;begin select job_id into v_job from user_reports where id=p_report_id;if v_job is null then raise exception 'report_not_found';end if;select id into v_id from dispute_cases where report_id=p_report_id;if v_id is null then insert into dispute_cases(report_id,job_id,status) values(p_report_id,v_job,'open') returning id into v_id;v_new:=true;end if;update user_reports set status='reviewing' where id=p_report_id and status='open';if v_new then insert into dispute_case_events(case_id,event_type,actor,note) values(v_id,'case_opened',coalesce(nullif(trim(p_actor),''),'ops'),'Formal review opened');insert into job_events(job_id,event_type,actor_type,metadata) values(v_job,'dispute_case_opened','admin',jsonb_build_object('case_id',v_id,'report_id',p_report_id));end if;return v_id;end $$;
+create or replace function public.update_dispute_case(p_case_id uuid,p_status text,p_actor text,p_note text default null) returns void language plpgsql security definer set search_path=public as $$ begin if p_status not in ('open','reviewing','awaiting_information') then raise exception 'invalid_review_status';end if;update dispute_cases set status=p_status,updated_at=now() where id=p_case_id;if not found then raise exception 'case_not_found';end if;insert into dispute_case_events(case_id,event_type,actor,note,metadata) values(p_case_id,'status_changed',p_actor,p_note,jsonb_build_object('status',p_status));end $$;
+create or replace function public.decide_dispute_case(p_case_id uuid,p_outcome text,p_reason text,p_actor text,p_apply_handyman_consequence boolean default false) returns void language plpgsql security definer set search_path=public as $$ declare v_report uuid;v_job uuid;v_handyman uuid;begin if p_outcome not in ('report_upheld','report_not_upheld','partially_upheld','inconclusive','resolved_between_parties') then raise exception 'invalid_outcome';end if;if nullif(trim(p_reason),'') is null then raise exception 'decision_reason_required';end if;select report_id,job_id into v_report,v_job from dispute_cases where id=p_case_id for update;if v_report is null then raise exception 'case_not_found';end if;update dispute_cases set status='closed',outcome=p_outcome,decision_reason=trim(p_reason),decided_at=now(),closed_at=now(),decided_by=p_actor,updated_at=now() where id=p_case_id;update user_reports set status='resolved',resolved_at=now(),resolution_notes=trim(p_reason),resolved_by=p_actor where id=v_report;insert into dispute_case_events(case_id,event_type,actor,note,metadata) values(p_case_id,'case_decided',p_actor,trim(p_reason),jsonb_build_object('outcome',p_outcome,'handyman_consequence_requested',p_apply_handyman_consequence));insert into job_events(job_id,event_type,actor_type,metadata) values(v_job,'dispute_case_decided','admin',jsonb_build_object('case_id',p_case_id,'report_id',v_report,'outcome',p_outcome));if p_apply_handyman_consequence and p_outcome in ('report_upheld','partially_upheld') then select reported_handyman_id into v_handyman from user_reports where id=v_report;if v_handyman is not null then insert into reliability_events(job_id,subject_type,subject_id,event_type,actor_type,notes) values(v_job,'handyman',v_handyman,'upheld_dispute','admin','Applied from upheld dispute case '||p_case_id::text);end if;end if;end $$;
+revoke all on function public.open_dispute_case(uuid,text) from public,anon,authenticated;revoke all on function public.update_dispute_case(uuid,text,text,text) from public,anon,authenticated;revoke all on function public.decide_dispute_case(uuid,text,text,text,boolean) from public,anon,authenticated;grant execute on function public.open_dispute_case(uuid,text) to service_role;grant execute on function public.update_dispute_case(uuid,text,text,text) to service_role;grant execute on function public.decide_dispute_case(uuid,text,text,text,boolean) to service_role;
+create or replace view public.dispute_case_ops as select d.id,d.report_id,d.job_id,d.status,d.outcome,d.decision_reason,d.assigned_to,d.opened_at,d.updated_at,d.decided_at,d.closed_at,d.decided_by,r.reporter_phone,r.reason report_reason,r.details report_details,j.description job_description,j.status job_status,j.suburb,j.city,h.full_name reported_handyman,h.phone reported_handyman_phone,c.full_name reported_customer,c.phone reported_customer_phone,(select count(*) from job_evidence e where e.job_id=d.job_id and (e.report_id=d.report_id or e.report_id is null)) evidence_count from dispute_cases d join user_reports r on r.id=d.report_id join jobs j on j.id=d.job_id left join handymen h on h.id=r.reported_handyman_id left join customers c on c.id=r.reported_customer_id;
 revoke all on public.dispute_cases,public.dispute_case_events from anon,authenticated;

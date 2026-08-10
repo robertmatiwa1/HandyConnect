@@ -1,9 +1,490 @@
 import { createClient } from "@supabase/supabase-js";
-type Incoming={channel?:string;external_user_id?:string;external_message_id?:string;message?:string;media?:{id:string;type:string;mime_type?:string;filename?:string}};
-const json=(b:unknown,s=200)=>new Response(JSON.stringify(b),{status:s,headers:{"content-type":"application/json; charset=utf-8"}});function key(){const raw=Deno.env.get("SUPABASE_SECRET_KEYS")??"";if(raw){try{const p=JSON.parse(raw);if(typeof p.default==='string')return p.default}catch{}}return Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")??""}function parseLocation(t:string){const p=t.split(',').map(x=>x.trim()).filter(Boolean);return p.length<2?null:{suburb:p[0],city:p[1],province:p[2]??null}}function safe(s:string){return s.replace(/[^a-zA-Z0-9._-]/g,'_').slice(-90)||'job-media'}function hx(buf:ArrayBuffer){return[...new Uint8Array(buf)].map(b=>b.toString(16).padStart(2,'0')).join('')}
-const urgencyUi={type:'buttons',body:'How soon do you need help?',buttons:[{id:'JI_URGENT',title:'As soon as possible'},{id:'JI_TODAY',title:'Today'},{id:'JI_FLEXIBLE',title:'Flexible'}]},timeUi={type:'list',body:'What appointment window suits you best?',button:'Choose time',rows:[{id:'JI_TIME_MORNING',title:'Morning'},{id:'JI_TIME_AFTERNOON',title:'Afternoon'},{id:'JI_TIME_EVENING',title:'Evening'},{id:'JI_TIME_ANY',title:'Any time'}]},materialsUi={type:'buttons',body:'Do you already have the parts or materials?',buttons:[{id:'JI_MAT_YES',title:'Yes'},{id:'JI_MAT_NO',title:'No'},{id:'JI_MAT_UNSURE',title:'Not sure'}]},photoUi={type:'buttons',body:'A photo can help the handyman understand the job before accepting.',buttons:[{id:'JI_SKIP_PHOTO',title:'Skip photo'}]};
-async function fetchMedia(media:any){const token=Deno.env.get('WHATSAPP_ACCESS_TOKEN')??'',version=Deno.env.get('WHATSAPP_GRAPH_VERSION')??'v26.0';if(!token)throw new Error('whatsapp_media_unavailable');const meta=await fetch(`https://graph.facebook.com/${version}/${media.id}`,{headers:{authorization:`Bearer ${token}`}});if(!meta.ok)throw new Error(`media_metadata_${meta.status}`);const m=await meta.json(),f=await fetch(m.url,{headers:{authorization:`Bearer ${token}`}});if(!f.ok)throw new Error(`media_download_${f.status}`);const buf=await f.arrayBuffer(),mime=f.headers.get('content-type')||media.mime_type||'application/octet-stream';if(buf.byteLength>10*1024*1024)throw new Error('job_media_too_large');if(!['image/jpeg','image/png','image/webp','application/pdf'].includes(mime.split(';')[0]))throw new Error('unsupported_job_media');return{buf,mime:mime.split(';')[0]}}
-async function archiveMedia(s:any,jobId:string,customerId:string,media:any){const f=await fetchMedia(media),hash=hx(await crypto.subtle.digest('SHA-256',f.buf)),ext=f.mime==='application/pdf'?'pdf':f.mime==='image/png'?'png':f.mime==='image/webp'?'webp':'jpg',path=`${jobId}/${crypto.randomUUID()}-${safe(media.filename||`job-photo.${ext}`)}`;const up=await s.storage.from('job-media').upload(path,f.buf,{contentType:f.mime,upsert:false});if(up.error)throw up.error;const ins=await s.from('job_attachments').insert({job_id:jobId,customer_id:customerId,media_id:media.id,media_type:media.type,mime_type:f.mime,file_name:media.filename??null,storage_path:path,sha256:hash,byte_size:f.buf.byteLength,archived_at:new Date().toISOString()});if(ins.error){await s.storage.from('job-media').remove([path]);throw ins.error}return{storage_path:path,media_type:media.type,mime_type:f.mime,file_name:media.filename??null}}
-async function durableMedia(s:any,jobId:string){const a=await s.from('job_attachments').select('storage_path,media_type,mime_type,file_name').eq('job_id',jobId).not('storage_path','is',null).order('created_at',{ascending:true}).limit(1).maybeSingle();if(!a.data?.storage_path)return undefined;const signed=await s.storage.from('job-media').createSignedUrl(a.data.storage_path,600);if(signed.error||!signed.data?.signedUrl)return undefined;return{link:signed.data.signedUrl,type:a.data.media_type||'image',mime_type:a.data.mime_type,file_name:a.data.file_name}}
-async function offer(s:any,job:any,skillName:string){const cand=await s.rpc('find_job_candidates',{p_job_id:job.id,p_limit:5});if(cand.error)throw cand.error;const rows=cand.data??[];if(!rows.length)return[];const ins=await s.from('job_matches').insert(rows.map((z:any)=>({job_id:job.id,handyman_id:z.handyman_id,match_score:z.score,status:'offered'}))).select('id,handyman_id');if(ins.error)throw ins.error;const hs=await s.from('handymen').select('id,phone').in('id',(ins.data??[]).map((z:any)=>z.handyman_id));const media=await durableMedia(s,job.id);return(ins.data??[]).map((m:any)=>{const h=(hs.data??[]).find((z:any)=>z.id===m.handyman_id);return{to:h?.phone,reply:`New ${skillName} job: ${job.description}\nLocation: ${job.suburb}, ${job.city}\nUrgency: ${job.urgency}\nPreferred time: ${job.appointment_window}\nMaterials: ${job.materials_status}${media?'\nCustomer attached a job photo.':''}`,media,ui:{type:'buttons',body:'Are you available for this job?',buttons:[{id:`ACCEPT:${m.id}`,title:'Accept'},{id:`DECLINE:${m.id}`,title:'Decline'},{id:'MY_JOBS',title:'My jobs'}]}}}).filter((x:any)=>x.to)}
-Deno.serve(async req=>{if(req.method!=='POST')return json({error:'method_not_allowed'},405);const k=key(),url=Deno.env.get('SUPABASE_URL')??'';if(!k||!url||req.headers.get('apikey')!==k)return json({error:'unauthorized'},401);let input:Incoming;try{input=await req.json()}catch{return json({error:'invalid_json'},400)}const phone=input.external_user_id?.trim(),msg=input.message?.trim()??'';if(!phone)return json({handled:false});const s=createClient(url,k,{auth:{persistSession:false,autoRefreshToken:false,detectSessionInUrl:false}});try{let q=await s.from('conversation_sessions').select('id,state,context').eq('channel',input.channel??'whatsapp').eq('external_user_id',phone).maybeSingle();let session=q.data;if(msg==='REQUEST_HELP'){if(!session){const n=await s.from('conversation_sessions').insert({channel:input.channel??'whatsapp',external_user_id:phone,flow:'job_intake',state:'ji_description',context:{}}).select('id,state,context').single();session=n.data}else await s.from('conversation_sessions').update({flow:'job_intake',state:'ji_description',context:{}}).eq('id',session.id);return json({handled:true,reply:'Tell me what needs fixing. A short description is enough.'})}if(!session||!String(session.state).startsWith('ji_'))return json({handled:false});let c:any=session.context??{};if(session.state==='ji_description'){if(msg.length<3)return json({handled:true,reply:'Please describe the problem in a few words.'});c={description:msg};await s.from('conversation_sessions').update({state:'ji_location',context:c}).eq('id',session.id);return json({handled:true,reply:'Where is the job? Send: Suburb, City, Province. Example: Langa, Cape Town, Western Cape'})}if(session.state==='ji_location'){const loc=parseLocation(msg);if(!loc)return json({handled:true,reply:'Please send at least Suburb, City.'});c={...c,...loc};await s.from('conversation_sessions').update({state:'ji_urgency',context:c}).eq('id',session.id);return json({handled:true,reply:'Got it.',ui:urgencyUi})}if(session.state==='ji_urgency'){const m:any={JI_URGENT:'urgent',JI_TODAY:'today',JI_FLEXIBLE:'flexible'};if(!m[msg])return json({handled:true,reply:'Choose how soon you need help.',ui:urgencyUi});c={...c,urgency:m[msg]};await s.from('conversation_sessions').update({state:'ji_time',context:c}).eq('id',session.id);return json({handled:true,reply:'When should the handyman come?',ui:timeUi})}if(session.state==='ji_time'){const m:any={JI_TIME_MORNING:'morning',JI_TIME_AFTERNOON:'afternoon',JI_TIME_EVENING:'evening',JI_TIME_ANY:'any_time'};if(!m[msg])return json({handled:true,reply:'Choose an appointment window.',ui:timeUi});c={...c,appointment_window:m[msg]};await s.from('conversation_sessions').update({state:'ji_materials',context:c}).eq('id',session.id);return json({handled:true,reply:'One more useful detail.',ui:materialsUi})}if(session.state==='ji_materials'){const m:any={JI_MAT_YES:'customer_has_materials',JI_MAT_NO:'materials_needed',JI_MAT_UNSURE:'unsure'};if(!m[msg])return json({handled:true,reply:'Choose the closest option.',ui:materialsUi});c={...c,materials_status:m[msg]};await s.from('conversation_sessions').update({state:'ji_photo',context:c}).eq('id',session.id);return json({handled:true,reply:'You can now send one photo of the problem, or skip it.',ui:photoUi})}if(session.state==='ji_photo'){if(input.media?.id)c={...c,photo:input.media};else if(msg!=='JI_SKIP_PHOTO')return json({handled:true,reply:'Send a photo, or tap Skip photo.',ui:photoUi});const skill=await s.rpc('infer_skill_for_job',{p_description:c.description});const skillId=skill.data?.skill_id,skillName=skill.data?.skill_name??'Handyman';const cust=await s.from('customers').upsert({phone},{onConflict:'phone'}).select('id').single();if(cust.error)throw cust.error;const job=await s.from('jobs').insert({customer_id:cust.data.id,skill_id:skillId,description:c.description,suburb:c.suburb,city:c.city,province:c.province,urgency:c.urgency,appointment_window:c.appointment_window,materials_status:c.materials_status,status:'matching',match_attempt_count:1,last_match_attempt_at:new Date().toISOString()}).select('id,description,suburb,city,urgency,appointment_window,materials_status').single();if(job.error)throw job.error;if(c.photo){try{await archiveMedia(s,job.data.id,cust.data.id,c.photo)}catch(e){console.error('job media archive failed',e);await s.from('jobs').delete().eq('id',job.data.id);return json({handled:true,reply:'I could not save that photo securely. Please resend a JPG, PNG, WebP or PDF under 10 MB, or choose Skip photo.'})}}const outbound=await offer(s,job.data,skillName);await s.from('conversation_sessions').update({flow:'ready',state:'ready',context:{}}).eq('id',session.id);return json({handled:true,job_id:job.data.id,reply:outbound.length?`Your request is active. I sent the full job details to ${outbound.length} matching handyman${outbound.length===1?'':'s'}. I'll tell you as soon as someone accepts.`:'Your request is active. No suitable handyman is available right now, so I’ll keep matching automatically.',outbound})}return json({handled:false})}catch(e){console.error(e);return json({error:'job_intake_failed'},500)}});
+
+type Incoming = {
+  channel?: string;
+  external_user_id?: string;
+  external_message_id?: string;
+  message?: string;
+  media?: { id: string; type: string; mime_type?: string; filename?: string };
+};
+
+const json = (body: unknown, status = 200) =>
+  new Response(JSON.stringify(body), {
+    status,
+    headers: { "content-type": "application/json; charset=utf-8" },
+  });
+
+function key() {
+  const raw = Deno.env.get("SUPABASE_SECRET_KEYS") ?? "";
+  if (raw) {
+    try {
+      const parsed = JSON.parse(raw);
+      if (typeof parsed.default === "string") return parsed.default;
+    } catch {
+      // Fall back to the legacy service-role key below.
+    }
+  }
+  return Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
+}
+
+function safe(value: string) {
+  return value.replace(/[^a-zA-Z0-9._-]/g, "_").slice(-90) || "job-media";
+}
+
+function hex(buffer: ArrayBuffer) {
+  return [...new Uint8Array(buffer)]
+    .map((byte) => byte.toString(16).padStart(2, "0"))
+    .join("");
+}
+
+const urgencyUi = {
+  type: "buttons",
+  body: "When do you need help?",
+  buttons: [
+    { id: "JI_URGENT", title: "As soon as possible" },
+    { id: "JI_TODAY", title: "Today" },
+    { id: "JI_FLEXIBLE", title: "I'm flexible" },
+  ],
+};
+
+const timeUi = {
+  type: "list",
+  body: "What time today works best?",
+  button: "Choose time",
+  rows: [
+    { id: "JI_TIME_MORNING", title: "Morning" },
+    { id: "JI_TIME_AFTERNOON", title: "Afternoon" },
+    { id: "JI_TIME_EVENING", title: "Evening" },
+    { id: "JI_TIME_ANY", title: "Any time" },
+  ],
+};
+
+const photoUi = {
+  type: "buttons",
+  body: "Add a photo? It can help handymen assess the job.",
+  buttons: [{ id: "JI_SKIP_PHOTO", title: "Skip" }],
+};
+
+async function updateSession(supabase: any, id: string, values: Record<string, unknown>) {
+  const result = await supabase.from("conversation_sessions").update(values).eq("id", id);
+  if (result.error) throw result.error;
+}
+
+async function fetchMedia(media: NonNullable<Incoming["media"]>) {
+  const token = Deno.env.get("WHATSAPP_ACCESS_TOKEN") ?? "";
+  const version = Deno.env.get("WHATSAPP_GRAPH_VERSION") ?? "v26.0";
+  if (!token) throw new Error("whatsapp_media_unavailable");
+
+  const metadataResponse = await fetch(
+    `https://graph.facebook.com/${version}/${media.id}`,
+    { headers: { authorization: `Bearer ${token}` } },
+  );
+  if (!metadataResponse.ok) throw new Error(`media_metadata_${metadataResponse.status}`);
+
+  const metadata = await metadataResponse.json();
+  const fileResponse = await fetch(metadata.url, {
+    headers: { authorization: `Bearer ${token}` },
+  });
+  if (!fileResponse.ok) throw new Error(`media_download_${fileResponse.status}`);
+
+  const buffer = await fileResponse.arrayBuffer();
+  const mime = (
+    fileResponse.headers.get("content-type") ||
+    media.mime_type ||
+    "application/octet-stream"
+  ).split(";")[0];
+
+  if (buffer.byteLength > 10 * 1024 * 1024) throw new Error("job_media_too_large");
+  if (!["image/jpeg", "image/png", "image/webp", "application/pdf"].includes(mime)) {
+    throw new Error("unsupported_job_media");
+  }
+  return { buffer, mime };
+}
+
+async function archiveMedia(
+  supabase: any,
+  jobId: string,
+  customerId: string,
+  media: NonNullable<Incoming["media"]>,
+) {
+  const file = await fetchMedia(media);
+  const hash = hex(await crypto.subtle.digest("SHA-256", file.buffer));
+  const extension = file.mime === "application/pdf"
+    ? "pdf"
+    : file.mime === "image/png"
+    ? "png"
+    : file.mime === "image/webp"
+    ? "webp"
+    : "jpg";
+  const path = `${jobId}/${crypto.randomUUID()}-${safe(
+    media.filename || `job-photo.${extension}`,
+  )}`;
+
+  const upload = await supabase.storage.from("job-media").upload(path, file.buffer, {
+    contentType: file.mime,
+    upsert: false,
+  });
+  if (upload.error) throw upload.error;
+
+  const insert = await supabase.from("job_attachments").insert({
+    job_id: jobId,
+    customer_id: customerId,
+    media_id: media.id,
+    media_type: media.type,
+    mime_type: file.mime,
+    file_name: media.filename ?? null,
+    storage_path: path,
+    sha256: hash,
+    byte_size: file.buffer.byteLength,
+    archived_at: new Date().toISOString(),
+  });
+  if (insert.error) {
+    await supabase.storage.from("job-media").remove([path]);
+    throw insert.error;
+  }
+}
+
+async function durableMedia(supabase: any, jobId: string) {
+  const attachment = await supabase
+    .from("job_attachments")
+    .select("storage_path,media_type,mime_type,file_name")
+    .eq("job_id", jobId)
+    .not("storage_path", "is", null)
+    .order("created_at", { ascending: true })
+    .limit(1)
+    .maybeSingle();
+
+  if (!attachment.data?.storage_path) return undefined;
+  const signed = await supabase.storage
+    .from("job-media")
+    .createSignedUrl(attachment.data.storage_path, 600);
+  if (signed.error || !signed.data?.signedUrl) return undefined;
+
+  return {
+    link: signed.data.signedUrl,
+    type: attachment.data.media_type || "image",
+    mime_type: attachment.data.mime_type,
+    file_name: attachment.data.file_name,
+  };
+}
+
+function timingLabel(job: any) {
+  if (job.urgency === "urgent") return "As soon as possible";
+  if (job.urgency === "today") {
+    const window = String(job.appointment_window || "any_time").replaceAll("_", " ");
+    return `Today · ${window}`;
+  }
+  return "Flexible";
+}
+
+async function offer(supabase: any, job: any, skillName: string) {
+  const candidates = await supabase.rpc("find_job_candidates", {
+    p_job_id: job.id,
+    p_limit: 5,
+  });
+  if (candidates.error) throw candidates.error;
+  const rows = candidates.data ?? [];
+  if (!rows.length) return [];
+
+  const inserted = await supabase
+    .from("job_matches")
+    .insert(rows.map((candidate: any) => ({
+      job_id: job.id,
+      handyman_id: candidate.handyman_id,
+      match_score: candidate.score,
+      status: "offered",
+    })))
+    .select("id,handyman_id");
+  if (inserted.error) throw inserted.error;
+
+  const handymen = await supabase
+    .from("handymen")
+    .select("id,phone")
+    .in("id", (inserted.data ?? []).map((match: any) => match.handyman_id));
+  if (handymen.error) throw handymen.error;
+
+  const media = await durableMedia(supabase, job.id);
+  return (inserted.data ?? [])
+    .map((match: any) => {
+      const handyman = (handymen.data ?? []).find((row: any) => row.id === match.handyman_id);
+      return {
+        to: handyman?.phone,
+        reply: [
+          `New ${skillName} request`,
+          job.description,
+          `📍 ${job.suburb}, ${job.city}`,
+          `🕒 ${timingLabel(job)}`,
+          media ? "📷 Photo attached" : null,
+        ].filter(Boolean).join("\n"),
+        media,
+        ui: {
+          type: "buttons",
+          body: "Are you available?",
+          buttons: [
+            { id: `ACCEPT:${match.id}`, title: "Accept" },
+            { id: `DECLINE:${match.id}`, title: "Decline" },
+            { id: "MY_JOBS", title: "My jobs" },
+          ],
+        },
+      };
+    })
+    .filter((item: any) => item.to);
+}
+
+async function staleAction(supabase: any, phone: string) {
+  const customer = await supabase.from("customers").select("id").eq("phone", phone).maybeSingle();
+  if (customer.error) throw customer.error;
+
+  let job: any = null;
+  if (customer.data?.id) {
+    const latest = await supabase
+      .from("jobs")
+      .select("id,description,status,suburb,city")
+      .eq("customer_id", customer.data.id)
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    if (latest.error) throw latest.error;
+    job = latest.data;
+  }
+
+  const active = job && ["open", "matching", "assigned", "in_progress"].includes(job.status);
+  return {
+    handled: true,
+    reply: active
+      ? `That button is from an earlier step. Your request “${job.description}” is still active.`
+      : "That button has expired. Start a new request when you need another handyman.",
+    ui: {
+      type: "buttons",
+      body: active ? "View your current request" : "What would you like to do?",
+      buttons: active
+        ? [
+          { id: `CJOB:${job.id}`, title: "View request" },
+          { id: "MY_JOBS", title: "My jobs" },
+          { id: "HOME", title: "Home" },
+        ]
+        : [
+          { id: "REQUEST_HELP", title: "New request" },
+          { id: "MY_JOBS", title: "My jobs" },
+          { id: "HOME", title: "Home" },
+        ],
+    },
+  };
+}
+
+Deno.serve(async (request) => {
+  if (request.method !== "POST") return json({ error: "method_not_allowed" }, 405);
+
+  const secret = key();
+  const url = Deno.env.get("SUPABASE_URL") ?? "";
+  if (!secret || !url || request.headers.get("apikey") !== secret) {
+    return json({ error: "unauthorized" }, 401);
+  }
+
+  let input: Incoming;
+  try {
+    input = await request.json();
+  } catch {
+    return json({ error: "invalid_json" }, 400);
+  }
+
+  const phone = input.external_user_id?.trim();
+  const message = input.message?.trim() ?? "";
+  if (!phone) return json({ handled: false });
+
+  const supabase = createClient(url, secret, {
+    auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false },
+  });
+
+  try {
+    const sessionResult = await supabase
+      .from("conversation_sessions")
+      .select("id,state,context")
+      .eq("channel", input.channel ?? "whatsapp")
+      .eq("external_user_id", phone)
+      .maybeSingle();
+    if (sessionResult.error) throw sessionResult.error;
+    let session = sessionResult.data;
+
+    if (message === "REQUEST_HELP") {
+      if (!session) {
+        const inserted = await supabase
+          .from("conversation_sessions")
+          .insert({
+            channel: input.channel ?? "whatsapp",
+            external_user_id: phone,
+            flow: "job_intake",
+            state: "ji_description",
+            context: {},
+          })
+          .select("id,state,context")
+          .single();
+        if (inserted.error) throw inserted.error;
+        session = inserted.data;
+      } else {
+        await updateSession(supabase, session.id, {
+          flow: "job_intake",
+          state: "ji_description",
+          context: {},
+        });
+      }
+      return json({
+        handled: true,
+        reply: "What needs fixing? Describe the problem in a sentence. You can also attach a photo.",
+      });
+    }
+
+    const active = session && String(session.state).startsWith("ji_");
+    if (!active && message.startsWith("JI_")) {
+      return json(await staleAction(supabase, phone));
+    }
+    if (!active) return json({ handled: false });
+
+    let context: any = session.context ?? {};
+
+    if (session.state === "ji_description") {
+      if (input.media?.id && message === "H_MEDIA_UPLOAD") {
+        await updateSession(supabase, session.id, {
+          context: { ...context, photo: input.media },
+        });
+        return json({ handled: true, reply: "Photo received. Now tell me what needs fixing." });
+      }
+      if (message.length < 3 || message === "H_MEDIA_UPLOAD") {
+        return json({ handled: true, reply: "Please describe the problem in a few words." });
+      }
+      context = {
+        description: message,
+        ...(input.media?.id ? { photo: input.media } : {}),
+      };
+      await updateSession(supabase, session.id, {
+        state: "ji_location",
+        context,
+      });
+      return json({
+        handled: true,
+        reply: "Which area is the job in? Send suburb and city. Example: Langa, Cape Town",
+      });
+    }
+
+    if (session.state === "ji_urgency") {
+      const timing: Record<string, { urgency: string; appointment_window: string | null }> = {
+        JI_URGENT: { urgency: "urgent", appointment_window: "any_time" },
+        JI_TODAY: { urgency: "today", appointment_window: null },
+        JI_FLEXIBLE: { urgency: "flexible", appointment_window: "any_time" },
+      };
+      const selected = timing[message];
+      if (!selected) return json({ handled: true, reply: urgencyUi.body, ui: urgencyUi });
+
+      context = { ...context, urgency: selected.urgency };
+      if (message === "JI_TODAY") {
+        await updateSession(supabase, session.id, { state: "ji_time", context });
+        return json({ handled: true, reply: timeUi.body, ui: timeUi });
+      }
+
+      context = { ...context, appointment_window: selected.appointment_window };
+      await updateSession(supabase, session.id, { state: "ji_photo", context });
+      return json({ handled: true, reply: photoUi.body, ui: photoUi });
+    }
+
+    if (session.state === "ji_time") {
+      const windows: Record<string, string> = {
+        JI_TIME_MORNING: "morning",
+        JI_TIME_AFTERNOON: "afternoon",
+        JI_TIME_EVENING: "evening",
+        JI_TIME_ANY: "any_time",
+      };
+      if (!windows[message]) return json({ handled: true, reply: timeUi.body, ui: timeUi });
+
+      context = { ...context, appointment_window: windows[message] };
+      await updateSession(supabase, session.id, { state: "ji_photo", context });
+      return json({ handled: true, reply: photoUi.body, ui: photoUi });
+    }
+
+    if (session.state === "ji_photo") {
+      if (input.media?.id) context = { ...context, photo: input.media };
+      else if (message !== "JI_SKIP_PHOTO") {
+        return json({ handled: true, reply: "Send one photo, or tap Skip.", ui: photoUi });
+      }
+
+      const skill = await supabase.rpc("infer_skill_for_job", {
+        p_description: context.description,
+      });
+      if (skill.error) throw skill.error;
+
+      const customer = await supabase
+        .from("customers")
+        .upsert({ phone }, { onConflict: "phone" })
+        .select("id")
+        .single();
+      if (customer.error) throw customer.error;
+
+      const job = await supabase
+        .from("jobs")
+        .insert({
+          customer_id: customer.data.id,
+          skill_id: skill.data?.skill_id,
+          description: context.description,
+          suburb: context.suburb,
+          city: context.city,
+          province: context.province,
+          urgency: context.urgency,
+          appointment_window: context.appointment_window,
+          materials_status: null,
+          status: "matching",
+          match_attempt_count: 1,
+          last_match_attempt_at: new Date().toISOString(),
+        })
+        .select("id,description,suburb,city,urgency,appointment_window")
+        .single();
+      if (job.error) throw job.error;
+
+      if (context.photo) {
+        try {
+          await archiveMedia(supabase, job.data.id, customer.data.id, context.photo);
+        } catch (error) {
+          console.error("job media archive failed", error);
+          await supabase.from("jobs").delete().eq("id", job.data.id);
+          return json({
+            handled: true,
+            reply: "I could not save that file securely. Send a JPG, PNG, WebP or PDF under 10 MB, or tap Skip.",
+            ui: photoUi,
+          });
+        }
+      }
+
+      const outbound = await offer(
+        supabase,
+        job.data,
+        skill.data?.skill_name ?? "handyman",
+      );
+      await updateSession(supabase, session.id, {
+        flow: "ready",
+        state: "ready",
+        context: {},
+      });
+
+      return json({
+        handled: true,
+        job_id: job.data.id,
+        reply: outbound.length
+          ? `Request sent ✅\n${job.data.description}\n📍 ${job.data.suburb}, ${job.data.city}\n\nWe’re contacting ${outbound.length} suitable handyman${outbound.length === 1 ? "" : "s"}. We’ll message you when one accepts.`
+          : `Request received ✅\n${job.data.description}\n📍 ${job.data.suburb}, ${job.data.city}\n\nNo suitable handyman is available yet. We’ll keep looking and message you when that changes.`,
+        ui: {
+          type: "buttons",
+          body: "Track or manage this request",
+          buttons: [
+            { id: `CJOB:${job.data.id}`, title: "View request" },
+            { id: "MY_JOBS", title: "My jobs" },
+            { id: "HOME", title: "Home" },
+          ],
+        },
+        outbound,
+      });
+    }
+
+    return json({ handled: false });
+  } catch (error) {
+    console.error(error);
+    return json({ error: "job_intake_failed" }, 500);
+  }
+});

@@ -222,6 +222,15 @@ Deno.serve(async (request) => {
   }
 
   if (message === "CUST_REG_ACCEPT") {
+    if (customerReady) {
+      await setRole("customer");
+      return json({
+        handled: true,
+        reply: "Your customer profile is already active.",
+        ui: customerUi(),
+      });
+    }
+
     const acceptedAt = new Date().toISOString();
     const saved = await supabase.from("customers").upsert({
       phone,
@@ -233,11 +242,25 @@ Deno.serve(async (request) => {
     if (saved.error) throw saved.error;
     await setRole("customer");
     if (saved.data.full_name) {
+      const cleared = await supabase.from("conversation_sessions").update({
+        flow: "ready",
+        state: "ready",
+        context: {},
+        status: "active",
+        updated_at: acceptedAt,
+      }).eq("channel", input.channel ?? "whatsapp").eq(
+        "external_user_id",
+        phone,
+      );
+      if (cleared.error) throw cleared.error;
+
+      const firstName = saved.data.preferred_name ||
+        String(saved.data.full_name).split(" ")[0];
       return json({
         handled: true,
-        reply: "Customer profile activated.",
-        delegate: "customer-home-router",
-        delegate_message: "HOME",
+        reply:
+          `Registration complete. Welcome, ${firstName} 👋\n\nYou can now request a handyman or open My jobs to view existing requests.`,
+        ui: customerUi(),
       });
     }
     const session = await supabase.from("conversation_sessions").upsert({
@@ -254,6 +277,14 @@ Deno.serve(async (request) => {
 
   if (message === "PROV_REG_ACCEPT") {
     await setRole("handyman");
+    if (handymanReady) {
+      return json({
+        handled: true,
+        reply:
+          "Your provider profile is already active. Verification is still required before receiving jobs.",
+        ui: handymanUi(hasCustomer),
+      });
+    }
     if (hasHandyman) {
       const acceptedAt = new Date().toISOString();
       const saved = await supabase.from("handymen").update({

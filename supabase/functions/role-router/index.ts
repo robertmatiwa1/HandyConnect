@@ -79,6 +79,8 @@ function customerMoreUi(canSwitch: boolean) {
     body: "More options",
     button: "Choose",
     rows: [
+      { id: "NAV:SERVICES", title: "Browse services" },
+      { id: "NAV:LEGAL", title: "Terms & Privacy" },
       { id: "CUST_PROFILE", title: "My profile" },
       { id: "CUST_HELP", title: "How it works" },
       ...(canSwitch
@@ -98,6 +100,7 @@ function handymanUi(canSwitch: boolean) {
       { id: "GO_AVAILABLE", title: "I'm available" },
       { id: "H_JOBS", title: "My jobs & offers" },
       { id: "MY_PROFILE", title: "My profile" },
+      { id: "NAV:LEGAL", title: "Terms & Privacy" },
       ...(canSwitch
         ? [{ id: "SWITCH_CUSTOMER", title: "Switch to customer" }]
         : []),
@@ -334,6 +337,54 @@ Deno.serve(async (request) => {
       handled: true,
       reply: "More options",
       ui: customerMoreUi(hasHandyman),
+    });
+  }
+
+  if (message === "NAV:SERVICES" && activeRole === "customer") {
+    const skills = await supabase.from("skills").select("name").eq(
+      "active",
+      true,
+    ).order("name").limit(20);
+    if (skills.error) throw skills.error;
+    const names = (skills.data ?? []).map((item: { name: string }) =>
+      item.name
+    );
+
+    return json({
+      handled: true,
+      reply: names.length
+        ? `HandyConnect currently supports:\n\n${
+          names.map((name: string) => `• ${name}`).join("\n")
+        }\n\nYou can browse without registering or accepting terms.`
+        : "Service browsing is temporarily unavailable. You can still describe the home repair you need.",
+      ui: {
+        type: "buttons",
+        body: "Ready when you are",
+        buttons: [
+          { id: "REQUEST_HELP", title: "Request handyman" },
+          { id: "CUST_HELP", title: "How it works" },
+          { id: "HOME", title: "Home" },
+        ],
+      },
+    });
+  }
+
+  if (message === "NAV:LEGAL") {
+    const body = [
+      "HandyConnect Terms & Privacy",
+      "You can read these documents at any time. Opening them does not change your consent status.",
+      "",
+      `Terms: ${TERMS_URL}`,
+      `Privacy Notice: ${PRIVACY_URL}`,
+    ].join("\n");
+    return json({
+      handled: true,
+      reply: body,
+      ui: {
+        type: "buttons",
+        body: "Terms and privacy links sent above.",
+        buttons: [{ id: "HOME", title: "Home" }],
+      },
     });
   }
 

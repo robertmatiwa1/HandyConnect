@@ -232,7 +232,20 @@ Deno.serve(async (request) => {
         },
       });
     }
-    const body = "Which job would you like to check?";
+    const body = "My jobs\nChoose a request to view its status and actions.";
+    const rows = [
+      ...jobs.slice(0, 8).map(row),
+      {
+        id: "REQUEST_HELP",
+        title: "New request",
+        description: "Request another handyman",
+      },
+      {
+        id: "HOME",
+        title: "Home",
+        description: "Back to the customer dashboard",
+      },
+    ];
     return json({
       handled: true,
       reply: body,
@@ -240,7 +253,7 @@ Deno.serve(async (request) => {
         type: "list",
         body,
         button: "Choose a job",
-        rows: jobs.slice(0, 8).map(row),
+        rows,
       },
     });
   }
@@ -269,7 +282,6 @@ Deno.serve(async (request) => {
   const actions: Action[] = [];
   if (["open", "matching"].includes(job.status)) {
     actions.push(
-      { id: `ADD_PHOTO:${job.job_id}`, title: "Add a photo" },
       { id: `EDIT_JOB:${job.job_id}`, title: "Edit request" },
       { id: `CANCEL:${job.job_id}`, title: "Cancel request" },
       { id: "MY_JOBS", title: "Back to jobs" },

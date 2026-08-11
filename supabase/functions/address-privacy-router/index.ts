@@ -133,13 +133,70 @@ Deno.serve(async (request) => {
     const session = sessionResult.data;
     const state = String(session?.state ?? "");
 
+    // Navigation is a global escape hatch. It must never be consumed as data
+    // by a partially completed intake, edit, duplicate, or report flow.
+    const customerNavigation = [
+      "MY_JOBS",
+      "CUSTOMER_JOBS",
+      "CUST_MORE",
+      "CUST_PROFILE",
+      "CUST_ADDRESSES",
+      "CUST_HELP",
+    ].includes(message) || message.startsWith("CJOB:") ||
+      message.startsWith("CSTALE:");
+
+    if (customerNavigation) {
+      if (session?.id && state !== "ready") {
+        const cleared = await supabase.from("conversation_sessions").update({
+          flow: "ready",
+          state: "ready",
+          context: {},
+          status: "active",
+          updated_at: new Date().toISOString(),
+        }).eq("id", session.id);
+        if (cleared.error) throw cleared.error;
+      }
+      const customerHome = await call(url, key, "customer-home-router", input);
+      if (customerHome?.handled) return json(customerHome);
+    }
+
+    if (message === "REQUEST_HELP" || message === "NEW_REQUEST") {
+      if (session?.id && state !== "ready") {
+        const cleared = await supabase.from("conversation_sessions").update({
+          flow: "ready",
+          state: "ready",
+          context: {},
+          status: "active",
+          updated_at: new Date().toISOString(),
+        }).eq("id", session.id);
+        if (cleared.error) throw cleared.error;
+      }
+      return json(
+        await call(url, key, "duplicate-job-router", {
+          ...input,
+          message: "REQUEST_HELP",
+        }),
+      );
+    }
+
     // An active flow always wins over generic menus and the legacy engine.
     if (state.startsWith("duplicate_")) {
       return json(await call(url, key, "duplicate-job-router", input));
     }
 
     if (
-      ["ji_description", "ji_urgency", "ji_time", "ji_photo", "ji_post_photo"]
+      [
+        "ji_description",
+        "ji_service_confirm",
+        "ji_urgency",
+        "ji_time",
+        "ji_photo_choice",
+        "ji_photo",
+        "ji_photo_confirm",
+        "ji_review",
+        "ji_edit",
+        "ji_post_photo",
+      ]
         .includes(state)
     ) {
       return json(await call(url, key, "job-intake-router", input));
@@ -156,20 +213,24 @@ Deno.serve(async (request) => {
       }
 
       const context = { ...(session.context ?? {}), ...location };
+      if (context.editing === "location") {
+        const reviewed = { ...context, editing: null };
+        await updateSession(supabase, session.id, {
+          state: "ji_review",
+          context: reviewed,
+        });
+        return json(
+          await call(url, key, "job-intake-router", {
+            ...input,
+            message: "JI_SHOW_REVIEW",
+          }),
+        );
+      }
       await updateSession(supabase, session.id, {
         state: "ji_urgency",
         context,
       });
       return json({ handled: true, reply: urgencyUi.body, ui: urgencyUi });
-    }
-
-    if (message === "REQUEST_HELP" || message === "NEW_REQUEST") {
-      return json(
-        await call(url, key, "duplicate-job-router", {
-          ...input,
-          message: "REQUEST_HELP",
-        }),
-      );
     }
 
     if (message === "H_JOBS" || message.startsWith("HJOBV:")) {

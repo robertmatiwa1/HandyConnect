@@ -56,36 +56,6 @@ function more() {
   };
 }
 
-function activeHome(name: string | undefined, job: any) {
-  const place = [job.suburb, job.city].filter(Boolean).join(", ");
-  const status = ["matching", "open"].includes(job.status)
-    ? "🔎 I’m finding a suitable, verified handyman for:"
-    : job.status === "assigned"
-    ? "✅ A handyman has accepted:"
-    : "🛠️ Work is in progress for:";
-  const reassurance = ["matching", "open"].includes(job.status)
-    ? "You don’t need to keep checking—I’ll message you as soon as someone accepts."
-    : "Open the request for the latest status and next action.";
-  const body = [
-    name ? `Hi ${name} 👋` : "Hi 👋",
-    "",
-    status,
-    job.description,
-    place ? `📍 ${place}` : null,
-    "",
-    reassurance,
-  ].filter((line) => line !== null).join("\n");
-  return {
-    type: "buttons",
-    body,
-    buttons: [
-      { id: `CJOB:${job.id}`, title: "View request" },
-      { id: "REQUEST_HELP", title: "New request" },
-      { id: "MY_JOBS", title: "My jobs" },
-    ],
-  };
-}
-
 async function call(
   url: string,
   secret: string,
@@ -166,11 +136,32 @@ Deno.serve(async (request) => {
       .update({
         full_name: name,
         preferred_name: name.split(" ")[0],
+        registration_status: "active",
         onboarding_completed_at: new Date().toISOString(),
         updated_at: new Date().toISOString(),
       })
       .eq("id", customer.data.id);
     if (updated.error) throw updated.error;
+
+    const firstName = name.split(" ")[0];
+    const pendingIntent = session.data.context?.pending_intent;
+    if (pendingIntent?.kind === "customer_request" && pendingIntent.message) {
+      const started = await call(url, secret, "job-intake-router", {
+        ...input,
+        message: "REQUEST_HELP",
+      });
+      if (started.status >= 300) return json(started.body, started.status);
+      const continued = await call(url, secret, "job-intake-router", {
+        ...input,
+        message: String(pendingIntent.message),
+      });
+      return json({
+        ...continued.body,
+        reply: `Registration complete. Welcome, ${firstName} 👋\n\n${
+          continued.body.reply ?? "Let's finish your request."
+        }`,
+      }, continued.status);
+    }
 
     const sessionUpdated = await supabase
       .from("conversation_sessions")
@@ -178,7 +169,6 @@ Deno.serve(async (request) => {
       .eq("id", session.data.id);
     if (sessionUpdated.error) throw sessionUpdated.error;
 
-    const firstName = name.split(" ")[0];
     return json({
       handled: true,
       reply: homeText(firstName),
@@ -192,10 +182,9 @@ Deno.serve(async (request) => {
 
   if (greeting) {
     if (!customer.data) {
-      const inserted = await supabase.from("customers").insert({ phone })
-        .select("id").single();
-      if (inserted.error) throw inserted.error;
-      customer = { data: { id: inserted.data.id } };
+      // Identity recognition is not customer registration. The canonical
+      // entry/role router owns guest onboarding and explicit consent.
+      return json({ handled: false });
     }
 
     if (!customer.data.full_name) {
@@ -227,18 +216,15 @@ Deno.serve(async (request) => {
 
     const firstName = customer.data.preferred_name ||
       String(customer.data.full_name).split(" ")[0];
-    const active = await supabase
-      .from("jobs")
-      .select("id,description,suburb,city,status,created_at")
-      .eq("customer_id", customer.data.id)
-      .in("status", ["open", "matching", "assigned", "in_progress"])
-      .order("created_at", { ascending: false })
-      .limit(1)
-      .maybeSingle();
-    if (active.error) throw active.error;
-    if (active.data) {
-      const ui = activeHome(firstName, active.data);
-      return json({ handled: true, reply: ui.body, ui });
+    if (session.data?.id && session.data.state !== "ready") {
+      const cleared = await supabase.from("conversation_sessions").update({
+        flow: "ready",
+        state: "ready",
+        context: {},
+        status: "active",
+        updated_at: new Date().toISOString(),
+      }).eq("id", session.data.id);
+      if (cleared.error) throw cleared.error;
     }
     return json({
       handled: true,

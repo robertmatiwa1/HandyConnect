@@ -1,5 +1,8 @@
 import { createClient } from "@supabase/supabase-js";
 
+const TERMS_URL = "https://robertmatiwa1.github.io/HandyConnect/terms/";
+const PRIVACY_URL = "https://robertmatiwa1.github.io/HandyConnect/privacy/";
+
 type Incoming = {
   channel?: string;
   external_user_id?: string;
@@ -49,6 +52,8 @@ function more() {
     body: "More options",
     button: "Choose",
     rows: [
+      { id: "NAV:SERVICES", title: "Browse services" },
+      { id: "NAV:LEGAL", title: "Terms & Privacy" },
       { id: "CUST_PROFILE", title: "My profile" },
       { id: "CUST_HELP", title: "How it works" },
       { id: "HOME", title: "Home" },
@@ -373,6 +378,54 @@ Deno.serve(async (request) => {
           { id: "REQUEST_HELP", title: "Request handyman" },
           { id: "HOME", title: "Home" },
         ],
+      },
+    });
+  }
+
+  if (message === "NAV:SERVICES") {
+    const skills = await supabase.from("skills").select("name").eq(
+      "active",
+      true,
+    ).order("name").limit(20);
+    if (skills.error) throw skills.error;
+    const names = (skills.data ?? []).map((item: { name: string }) =>
+      item.name
+    );
+
+    return json({
+      handled: true,
+      reply: names.length
+        ? `HandyConnect currently supports:\n\n${
+          names.map((name: string) => `• ${name}`).join("\n")
+        }`
+        : "Service browsing is temporarily unavailable. You can still describe the home repair you need.",
+      ui: {
+        type: "buttons",
+        body: "Ready when you are",
+        buttons: [
+          { id: "REQUEST_HELP", title: "Request handyman" },
+          { id: "CUST_HELP", title: "How it works" },
+          { id: "HOME", title: "Home" },
+        ],
+      },
+    });
+  }
+
+  if (message === "NAV:LEGAL") {
+    const body = [
+      "HandyConnect Terms & Privacy",
+      "You can read these documents at any time. Opening them does not change your consent status.",
+      "",
+      `Terms: ${TERMS_URL}`,
+      `Privacy Notice: ${PRIVACY_URL}`,
+    ].join("\n");
+    return json({
+      handled: true,
+      reply: body,
+      ui: {
+        type: "buttons",
+        body: "Terms and privacy links sent above.",
+        buttons: [{ id: "HOME", title: "Home" }],
       },
     });
   }

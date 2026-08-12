@@ -119,7 +119,7 @@ begin
       p_phone,
       'job_offer',
       format(
-        'New %s job: %s\nLocation: %s, %s\nUrgency: %s\nPreferred time: %s\nMaterials: %s',
+        E'New %s job: %s\nLocation: %s, %s\nUrgency: %s\nPreferred time: %s\nMaterials: %s',
         v_row.skill_name,
         v_row.description,
         v_row.suburb,

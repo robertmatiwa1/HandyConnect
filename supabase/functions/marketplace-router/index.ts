@@ -163,6 +163,95 @@ async function providerCapacity(s: any, handymanId: string) {
   if (q.error) throw q.error;
   return q.data;
 }
+
+type OfferJob = {
+  match_id: string;
+  job_id: string;
+  description: string;
+  suburb: string;
+  city: string;
+  province: string;
+  service_mode: string;
+  scheduled_start_at: string | null;
+};
+
+const locationKey = (value: string) => value.trim().toLocaleLowerCase("en-ZA");
+const locationId = (value: string) => encodeURIComponent(value.trim());
+const locationValue = (value: string) => decodeURIComponent(value);
+
+async function openOfferJobs(s: any, handymanId: string): Promise<OfferJob[]> {
+  const offers = await s.from("job_matches").select(
+    "id,job_id,offered_at,offer_expires_at",
+  ).eq("handyman_id", handymanId).eq("status", "offered").or(
+    `offer_expires_at.is.null,offer_expires_at.gt.${new Date().toISOString()}`,
+  ).order("offered_at", { ascending: false }).limit(1000);
+  if (offers.error) throw offers.error;
+  const ids = (offers.data ?? []).map((x: any) => x.job_id);
+  const jobs = ids.length
+    ? await s.from("jobs").select(
+      "id,description,suburb,city,province,status,service_mode,scheduled_start_at",
+    ).in("id", ids).in("status", ["open", "matching"])
+    : { data: [], error: null };
+  if (jobs.error) throw jobs.error;
+  const byId = new Map((jobs.data ?? []).map((j: any) => [j.id, j]));
+  return (offers.data ?? []).flatMap((offer: any) => {
+    const job: any = byId.get(offer.job_id);
+    if (!job) return [];
+    return [{
+      match_id: offer.id,
+      job_id: job.id,
+      description: job.description,
+      suburb: job.suburb?.trim() || "Area not specified",
+      city: job.city?.trim() || "Town not specified",
+      province: job.province?.trim() || "Province not specified",
+      service_mode: job.service_mode,
+      scheduled_start_at: job.scheduled_start_at,
+    }];
+  });
+}
+
+function locationGroups(
+  jobs: OfferJob[],
+  field: "province" | "city" | "suburb",
+) {
+  const groups = new Map<string, { label: string; count: number }>();
+  for (const job of jobs) {
+    const label = job[field];
+    const key = locationKey(label);
+    const current = groups.get(key);
+    groups.set(key, { label: current?.label ?? label, count: (current?.count ?? 0) + 1 });
+  }
+  return [...groups.values()].sort((a, b) => a.label.localeCompare(b.label));
+}
+
+function pagedLocationMenu(
+  groups: { label: string; count: number }[],
+  page: number,
+  prefix: string,
+  body: string,
+  backId?: string,
+  pagePrefix = `${prefix}_PAGE`,
+) {
+  const pageSize = 6;
+  const lastPage = Math.max(0, Math.ceil(groups.length / pageSize) - 1);
+  const safePage = Math.max(0, Math.min(page, lastPage));
+  const rows: Row[] = groups.slice(safePage * pageSize, (safePage + 1) * pageSize)
+    .map((group) => ({
+      id: `${prefix}:${locationId(group.label)}`,
+      title: short(group.label, 24),
+      description: `${group.count} open job${group.count === 1 ? "" : "s"}`,
+    }));
+  if (safePage > 0) rows.push({ id: `${pagePrefix}:${safePage - 1}`, title: "Previous" });
+  if (safePage < lastPage) rows.push({ id: `${pagePrefix}:${safePage + 1}`, title: "Next" });
+  if (backId) rows.push({ id: backId, title: "Back" });
+  rows.push({ id: "HANDYMAN_HOME", title: "Dashboard" });
+  return {
+    type: "list",
+    body: `${body} · Page ${safePage + 1} of ${lastPage + 1}`,
+    button: "Choose",
+    rows: rows.slice(0, 10),
+  };
+}
 async function handymanCurrentJob(s: any, handymanId: string) {
   const h = await providerCapacity(s, handymanId);
   if (!h.active_job_id) {
@@ -193,38 +282,13 @@ async function handymanCurrentJob(s: any, handymanId: string) {
   }
   return handymanJob(s, handymanId, h.active_job_id);
 }
-async function handymanNewJobs(s: any, handymanId: string) {
+async function handymanNewJobs(s: any, handymanId: string, page = 0) {
   const h = await providerCapacity(s, handymanId);
-  const offers = await s.from("job_matches").select(
-    "id,job_id,offered_at,offer_expires_at",
-  ).eq("handyman_id", handymanId).eq("status", "offered").or(
-    `offer_expires_at.is.null,offer_expires_at.gt.${new Date().toISOString()}`,
-  ).order("offered_at", { ascending: false }).limit(9);
-  if (offers.error) throw offers.error;
-  const ids = (offers.data ?? []).map((x: any) => x.job_id);
-  const jobs = ids.length
-    ? await s.from("jobs").select(
-      "id,description,suburb,city,status,service_mode,scheduled_start_at",
-    ).in("id", ids).in("status", ["open", "matching"])
-    : { data: [], error: null };
-  if (jobs.error) throw jobs.error;
-  const byId = new Map((jobs.data ?? []).map((j: any) => [j.id, j]));
-  const rows = (offers.data ?? []).flatMap((o: any) => {
-    const j: any = byId.get(o.job_id);
-    return j
-      ? [{
-        id: `HJOB_MATCH:${o.id}`,
-        title: short(j.description),
-        description: `${
-          j.service_mode === "scheduled" ? "Scheduled" : "New"
-        } · ${[j.suburb, j.city].filter(Boolean).join(", ")}`,
-      }]
-      : [];
-  });
+  const jobs = await openOfferJobs(s, handymanId);
   const busyText = h.active_job_id
     ? " You may browse, but another immediate job cannot be accepted until Current job is released."
     : "";
-  if (!rows.length) {
+  if (!jobs.length) {
     return {
       ok: true,
       reply: `There are no open matching offers for you right now.${busyText}`,
@@ -245,15 +309,52 @@ async function handymanNewJobs(s: any, handymanId: string) {
   }
   return {
     ok: true,
-    reply: `${rows.length} matching job${
-      rows.length === 1 ? "" : "s"
-    }.${busyText}`,
-    ui: {
-      type: "list",
-      body: h.active_job_id ? "New jobs · acceptance locked" : "New jobs",
-      button: "View job",
-      rows: [...rows, { id: "HANDYMAN_HOME", title: "Dashboard" }].slice(0, 10),
-    },
+    reply: `${jobs.length} matching job${jobs.length === 1 ? "" : "s"}. Choose a province first.${busyText}`,
+    ui: pagedLocationMenu(locationGroups(jobs, "province"), page, "HLOC_PROVINCE", "New jobs · Provinces"),
+  };
+}
+
+async function handymanJobsByCity(s: any, handymanId: string, province: string, page = 0) {
+  const jobs = (await openOfferJobs(s, handymanId)).filter((job) => locationKey(job.province) === locationKey(province));
+  return {
+    ok: true,
+    reply: `${jobs.length} open job${jobs.length === 1 ? "" : "s"} in ${province}. Choose a town or city.`,
+    ui: pagedLocationMenu(locationGroups(jobs, "city"), page, `HLOC_CITY:${locationId(province)}`, `${province} · Towns`, "H_NEW", `HLOC_CITIES:${locationId(province)}`),
+  };
+}
+
+async function handymanJobsByArea(s: any, handymanId: string, province: string, city: string, page = 0) {
+  const jobs = (await openOfferJobs(s, handymanId)).filter((job) =>
+    locationKey(job.province) === locationKey(province) && locationKey(job.city) === locationKey(city)
+  );
+  return {
+    ok: true,
+    reply: `${jobs.length} open job${jobs.length === 1 ? "" : "s"} in ${city}, ${province}. Choose an area.`,
+    ui: pagedLocationMenu(locationGroups(jobs, "suburb"), page, `HLOC_AREA:${locationId(province)}:${locationId(city)}`, `${city} · Areas`, `HLOC_PROVINCE:${locationId(province)}`, `HLOC_AREAS:${locationId(province)}:${locationId(city)}`),
+  };
+}
+
+async function handymanJobsInArea(s: any, handymanId: string, province: string, city: string, suburb: string, page = 0) {
+  const jobs = (await openOfferJobs(s, handymanId)).filter((job) =>
+    locationKey(job.province) === locationKey(province) && locationKey(job.city) === locationKey(city) && locationKey(job.suburb) === locationKey(suburb)
+  );
+  const pageSize = 6;
+  const lastPage = Math.max(0, Math.ceil(jobs.length / pageSize) - 1);
+  const safePage = Math.max(0, Math.min(page, lastPage));
+  const base = `HLOC_JOBS:${locationId(province)}:${locationId(city)}:${locationId(suburb)}`;
+  const rows: Row[] = jobs.slice(safePage * pageSize, (safePage + 1) * pageSize).map((job) => ({
+    id: `HJOB_MATCH:${job.match_id}`,
+    title: short(job.description),
+    description: `${job.service_mode === "scheduled" ? "Scheduled" : "New"} · ${job.suburb}, ${job.city}`,
+  }));
+  if (safePage > 0) rows.push({ id: `${base}:${safePage - 1}`, title: "Previous" });
+  if (safePage < lastPage) rows.push({ id: `${base}:${safePage + 1}`, title: "Next" });
+  rows.push({ id: `HLOC_CITY:${locationId(province)}:${locationId(city)}`, title: "Back to areas" });
+  rows.push({ id: "HANDYMAN_HOME", title: "Dashboard" });
+  return {
+    ok: true,
+    reply: `${jobs.length} open job${jobs.length === 1 ? "" : "s"} in ${suburb}, ${city}, ${province}.`,
+    ui: { type: "list", body: `${suburb} jobs · Page ${safePage + 1} of ${lastPage + 1}`, button: "View job", rows: rows.slice(0, 10) },
   };
 }
 async function handymanOffer(s: any, handymanId: string, matchId: string) {
@@ -281,7 +382,7 @@ async function handymanOffer(s: any, handymanId: string, matchId: string) {
     };
   }
   const job = await s.from("jobs").select(
-    "id,description,suburb,city,urgency,appointment_window,service_mode,scheduled_start_at,status",
+    "id,description,suburb,city,province,urgency,appointment_window,service_mode,scheduled_start_at,status",
   ).eq("id", offer.data.job_id).maybeSingle();
   if (job.error) throw job.error;
   if (!job.data || !["open", "matching"].includes(job.data.status)) {
@@ -304,7 +405,7 @@ async function handymanOffer(s: any, handymanId: string, matchId: string) {
   return {
     ok: true,
     reply: `${job.data.description}\n📍 ${
-      [job.data.suburb, job.data.city].filter(Boolean).join(", ")
+      [job.data.suburb, job.data.city, job.data.province].filter(Boolean).join(", ")
     }\nWhen: ${when}${
       h.active_job_id && job.data.service_mode === "immediate"
         ? "\n\nAcceptance is locked while Current job is active."
@@ -1022,6 +1123,36 @@ Deno.serve(async (req) => {
     }
     if (h.data && message === "H_NEW") {
       return json(await handymanNewJobs(s, h.data.id));
+    }
+    if (h.data && message.startsWith("HLOC_PROVINCE_PAGE:")) {
+      return json(await handymanNewJobs(s, h.data.id, Number(message.split(":")[1]) || 0));
+    }
+    if (h.data && message.startsWith("HLOC_PROVINCE:")) {
+      const province = locationValue(message.slice("HLOC_PROVINCE:".length));
+      return json(await handymanJobsByCity(s, h.data.id, province));
+    }
+    if (h.data && message.startsWith("HLOC_CITIES:")) {
+      const parts = message.split(":");
+      return json(await handymanJobsByCity(s, h.data.id, locationValue(parts[1]), Number(parts[2]) || 0));
+    }
+    if (h.data && message.startsWith("HLOC_CITY:")) {
+      const parts = message.split(":");
+      const province = locationValue(parts[1]);
+      const city = parts[2] ? locationValue(parts[2]) : "";
+      if (city) return json(await handymanJobsByArea(s, h.data.id, province, city));
+      return json(await handymanJobsByCity(s, h.data.id, province));
+    }
+    if (h.data && message.startsWith("HLOC_AREA:")) {
+      const parts = message.split(":");
+      return json(await handymanJobsInArea(s, h.data.id, locationValue(parts[1]), locationValue(parts[2]), locationValue(parts[3])));
+    }
+    if (h.data && message.startsWith("HLOC_AREAS:")) {
+      const parts = message.split(":");
+      return json(await handymanJobsByArea(s, h.data.id, locationValue(parts[1]), locationValue(parts[2]), Number(parts[3]) || 0));
+    }
+    if (h.data && message.startsWith("HLOC_JOBS:")) {
+      const parts = message.split(":");
+      return json(await handymanJobsInArea(s, h.data.id, locationValue(parts[1]), locationValue(parts[2]), locationValue(parts[3]), Number(parts[4]) || 0));
     }
     if (h.data && message === "H_HISTORY") {
       return json(await handymanHistory(s, h.data.id));

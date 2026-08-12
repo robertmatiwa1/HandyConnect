@@ -185,7 +185,18 @@ Deno.serve(async (request) => {
     }
 
     if (
-      ["ji_description", "ji_urgency", "ji_time", "ji_photo", "ji_post_photo"]
+      [
+        "ji_description",
+        "ji_service_confirm",
+        "ji_urgency",
+        "ji_time",
+        "ji_photo_choice",
+        "ji_photo",
+        "ji_photo_confirm",
+        "ji_review",
+        "ji_edit",
+        "ji_post_photo",
+      ]
         .includes(state)
     ) {
       return json(await call(url, key, "job-intake-router", input));
@@ -202,6 +213,19 @@ Deno.serve(async (request) => {
       }
 
       const context = { ...(session.context ?? {}), ...location };
+      if (context.editing === "location") {
+        const reviewed = { ...context, editing: null };
+        await updateSession(supabase, session.id, {
+          state: "ji_review",
+          context: reviewed,
+        });
+        return json(
+          await call(url, key, "job-intake-router", {
+            ...input,
+            message: "JI_SHOW_REVIEW",
+          }),
+        );
+      }
       await updateSession(supabase, session.id, {
         state: "ji_urgency",
         context,

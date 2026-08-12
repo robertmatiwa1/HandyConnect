@@ -1,4 +1,5 @@
 import { createClient } from "@supabase/supabase-js";
+import { classifyService } from "../_shared/service-scope.ts";
 
 type Incoming = {
   channel?: string;
@@ -31,6 +32,18 @@ const isGreeting = (message: string) =>
     message.toLowerCase(),
   ) || message === "HOME";
 
+async function call(url: string, key: string, target: string, input: unknown) {
+  const response = await fetch(`${url}/functions/v1/${target}`, {
+    method: "POST",
+    headers: { apikey: key, "content-type": "application/json" },
+    body: JSON.stringify(input),
+  });
+  return {
+    status: response.status,
+    body: await response.json().catch(() => ({ handled: false })),
+  };
+}
+
 const chooseRoleUi = {
   type: "buttons",
   body: "How are you using HandyConnect?",
@@ -40,19 +53,21 @@ const chooseRoleUi = {
   ],
 };
 
-const TERMS_VERSION = "2026-08-10";
+const TERMS_VERSION = "2026-08-11";
+const TERMS_URL = "https://robertmatiwa1.github.io/HandyConnect/terms/";
+const PRIVACY_URL = "https://robertmatiwa1.github.io/HandyConnect/privacy/";
 
 function registrationUi(role: Role) {
   const provider = role === "handyman";
   return {
     type: "buttons",
     body: provider
-      ? "Create your provider profile? By continuing, you accept HandyConnect’s Terms and acknowledge the Privacy Notice. Provider access still requires verification."
-      : "Create your customer profile? By continuing, you accept HandyConnect’s Terms and acknowledge the Privacy Notice.",
+      ? `Before creating a provider profile, please review HandyConnect’s Terms and Privacy Notice. Providers are independent, and verification is required before receiving work.\n\nTerms: ${TERMS_URL}\nPrivacy: ${PRIVACY_URL}`
+      : `Before submitting a request, please review HandyConnect’s Terms and Privacy Notice. HandyConnect connects you with independent providers; agree the scope and price before work starts.\n\nTerms: ${TERMS_URL}\nPrivacy: ${PRIVACY_URL}`,
     buttons: [
       {
         id: provider ? "PROV_REG_ACCEPT" : "CUST_REG_ACCEPT",
-        title: "Continue",
+        title: "Accept & continue",
       },
       { id: "REG_NOT_NOW", title: "Not now" },
     ],
@@ -77,6 +92,8 @@ function customerMoreUi(canSwitch: boolean) {
     body: "More options",
     button: "Choose",
     rows: [
+      { id: "NAV:SERVICES", title: "Browse services" },
+      { id: "NAV:LEGAL", title: "Terms & Privacy" },
       { id: "CUST_PROFILE", title: "My profile" },
       { id: "CUST_HELP", title: "How it works" },
       ...(canSwitch
@@ -96,6 +113,7 @@ function handymanUi(canSwitch: boolean) {
       { id: "GO_AVAILABLE", title: "I'm available" },
       { id: "H_JOBS", title: "My jobs & offers" },
       { id: "MY_PROFILE", title: "My profile" },
+      { id: "NAV:LEGAL", title: "Terms & Privacy" },
       ...(canSwitch
         ? [{ id: "SWITCH_CUSTOMER", title: "Switch to customer" }]
         : []),
@@ -131,7 +149,7 @@ Deno.serve(async (request) => {
     },
   });
 
-  const [customer, handyman, preference] = await Promise.all([
+  const [customer, handyman, preference, session] = await Promise.all([
     supabase.from("customers").select(
       "id,full_name,preferred_name,registration_status,terms_accepted_at",
     ).eq(
@@ -146,7 +164,15 @@ Deno.serve(async (request) => {
       "external_user_id",
       phone,
     ).maybeSingle(),
+    supabase.from("conversation_sessions").select("flow,state").eq(
+      "channel",
+      input.channel ?? "whatsapp",
+    ).eq("external_user_id", phone).maybeSingle(),
   ]);
+
+  for (const result of [customer, handyman, preference, session]) {
+    if (result.error) throw result.error;
+  }
 
   const hasCustomer = Boolean(customer.data);
   const hasHandyman = Boolean(handyman.data);
@@ -170,18 +196,25 @@ Deno.serve(async (request) => {
   }
 
   if (message === "ROLE_USE_CUSTOMER" || message === "SWITCH_CUSTOMER") {
-    if (!hasCustomer) {
-      const created = await supabase.from("customers").insert({
-        phone,
-        registration_status: "onboarding",
-      });
-      if (created.error) throw created.error;
-    }
     await setRole("customer");
     if (!customerReady) {
+      const existingSession = await supabase.from("conversation_sessions")
+        .select("context").eq("channel", input.channel ?? "whatsapp")
+        .eq("external_user_id", phone).maybeSingle();
+      if (existingSession.error) throw existingSession.error;
+      const session = await supabase.from("conversation_sessions").upsert({
+        channel: input.channel ?? "whatsapp",
+        external_user_id: phone,
+        flow: "customer_onboarding",
+        state: "customer_registration",
+        context: existingSession.data?.context ?? {},
+        status: "active",
+        updated_at: new Date().toISOString(),
+      }, { onConflict: "channel,external_user_id" });
+      if (session.error) throw session.error;
       return json({
         handled: true,
-        reply: "Registration is required before requesting or managing jobs.",
+        reply: "You can browse and prepare a request without registering. We only need your details when you submit it.",
         ui: registrationUi("customer"),
       });
     }
@@ -263,12 +296,16 @@ Deno.serve(async (request) => {
         ui: customerUi(),
       });
     }
+    const existingSession = await supabase.from("conversation_sessions")
+      .select("context").eq("channel", input.channel ?? "whatsapp")
+      .eq("external_user_id", phone).maybeSingle();
+    if (existingSession.error) throw existingSession.error;
     const session = await supabase.from("conversation_sessions").upsert({
       channel: input.channel ?? "whatsapp",
       external_user_id: phone,
       flow: "customer_onboarding",
       state: "customer_name",
-      context: {},
+      context: existingSession.data?.context ?? {},
       status: "active",
     }, { onConflict: "channel,external_user_id" });
     if (session.error) throw session.error;
@@ -322,6 +359,90 @@ Deno.serve(async (request) => {
       reply: "More options",
       ui: customerMoreUi(hasHandyman),
     });
+  }
+
+  if (message === "NAV:SERVICES" && activeRole === "customer") {
+    const skills = await supabase.from("skills").select("name").eq(
+      "active",
+      true,
+    ).order("name").limit(20);
+    if (skills.error) throw skills.error;
+    const names = (skills.data ?? []).map((item: { name: string }) =>
+      item.name
+    );
+
+    return json({
+      handled: true,
+      reply: names.length
+        ? `HandyConnect currently supports:\n\n${
+          names.map((name: string) => `• ${name}`).join("\n")
+        }\n\nYou can browse without registering or accepting terms.`
+        : "Service browsing is temporarily unavailable. You can still describe the home repair you need.",
+      ui: {
+        type: "buttons",
+        body: "Ready when you are",
+        buttons: [
+          { id: "REQUEST_HELP", title: "Request handyman" },
+          { id: "CUST_HELP", title: "How it works" },
+          { id: "HOME", title: "Home" },
+        ],
+      },
+    });
+  }
+
+  if (message === "NAV:LEGAL") {
+    const body = [
+      "HandyConnect Terms & Privacy",
+      "You can read these documents at any time. Opening them does not change your consent status.",
+      "",
+      `Terms: ${TERMS_URL}`,
+      `Privacy Notice: ${PRIVACY_URL}`,
+    ].join("\n");
+    return json({
+      handled: true,
+      reply: body,
+      ui: {
+        type: "buttons",
+        body: "Terms and privacy links sent above.",
+        buttons: [{ id: "HOME", title: "Home" }],
+      },
+    });
+  }
+
+  // The production webhook still sends non-pilot identities through this
+  // router before the conversation engine. Once provider onboarding is
+  // active, every answer belongs to that conversation even though the
+  // handymen row is intentionally not created until the form is complete.
+  // Resume it before the generic "registration incomplete" gate below.
+  if (
+    activeRole === "handyman" &&
+    session.data?.flow === "handyman_onboarding" &&
+    session.data?.state &&
+    session.data.state !== "ready"
+  ) {
+    return json({
+      handled: true,
+      delegate: "conversation-engine",
+      delegate_message: message,
+    });
+  }
+
+  // A clear supported service description typed at the customer home screen
+  // is itself a request intent. Keep later flow answers with their active
+  // router, and pass the customer's original description through unchanged.
+  const atCustomerHome = !session.data?.state || session.data.state === "ready";
+  const directRequest = classifyService(message);
+  if (
+    activeRole === "customer" && customerReady && atCustomerHome &&
+    directRequest.scope === "supported"
+  ) {
+    const started = await call(url, key, "job-intake-router", {
+      ...input,
+      message: "REQUEST_HELP",
+    });
+    if (started.status >= 300) return json(started.body, started.status);
+    const continued = await call(url, key, "job-intake-router", input);
+    return json({ ...continued.body, handled: true }, continued.status);
   }
 
   if (!isGreeting(message)) {

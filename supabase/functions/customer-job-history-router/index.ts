@@ -282,7 +282,6 @@ Deno.serve(async (request) => {
   const actions: Action[] = [];
   if (["open", "matching"].includes(job.status)) {
     actions.push(
-      { id: `ADD_PHOTO:${job.job_id}`, title: "Add a photo" },
       { id: `EDIT_JOB:${job.job_id}`, title: "Edit request" },
       { id: `CANCEL:${job.job_id}`, title: "Cancel request" },
       { id: "MY_JOBS", title: "Back to jobs" },

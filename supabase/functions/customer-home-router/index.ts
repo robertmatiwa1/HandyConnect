@@ -1,5 +1,8 @@
 import { createClient } from "@supabase/supabase-js";
 
+const TERMS_URL = "https://robertmatiwa1.github.io/HandyConnect/terms/";
+const PRIVACY_URL = "https://robertmatiwa1.github.io/HandyConnect/privacy/";
+
 type Incoming = {
   channel?: string;
   external_user_id?: string;
@@ -49,6 +52,8 @@ function more() {
     body: "More options",
     button: "Choose",
     rows: [
+      { id: "NAV:SERVICES", title: "Browse services" },
+      { id: "NAV:LEGAL", title: "Terms & Privacy" },
       { id: "CUST_PROFILE", title: "My profile" },
       { id: "CUST_HELP", title: "How it works" },
       { id: "HOME", title: "Home" },
@@ -143,13 +148,32 @@ Deno.serve(async (request) => {
       .eq("id", customer.data.id);
     if (updated.error) throw updated.error;
 
+    const firstName = name.split(" ")[0];
+    const pendingIntent = session.data.context?.pending_intent;
+    if (pendingIntent?.kind === "customer_request" && pendingIntent.message) {
+      const started = await call(url, secret, "job-intake-router", {
+        ...input,
+        message: "REQUEST_HELP",
+      });
+      if (started.status >= 300) return json(started.body, started.status);
+      const continued = await call(url, secret, "job-intake-router", {
+        ...input,
+        message: String(pendingIntent.message),
+      });
+      return json({
+        ...continued.body,
+        reply: `Registration complete. Welcome, ${firstName} 👋\n\n${
+          continued.body.reply ?? "Let's finish your request."
+        }`,
+      }, continued.status);
+    }
+
     const sessionUpdated = await supabase
       .from("conversation_sessions")
       .update({ state: "ready", flow: "ready", context: {} })
       .eq("id", session.data.id);
     if (sessionUpdated.error) throw sessionUpdated.error;
 
-    const firstName = name.split(" ")[0];
     return json({
       handled: true,
       reply: homeText(firstName),
@@ -163,10 +187,9 @@ Deno.serve(async (request) => {
 
   if (greeting) {
     if (!customer.data) {
-      const inserted = await supabase.from("customers").insert({ phone })
-        .select("id").single();
-      if (inserted.error) throw inserted.error;
-      customer = { data: { id: inserted.data.id } };
+      // Identity recognition is not customer registration. The canonical
+      // entry/role router owns guest onboarding and explicit consent.
+      return json({ handled: false });
     }
 
     if (!customer.data.full_name) {
@@ -355,6 +378,54 @@ Deno.serve(async (request) => {
           { id: "REQUEST_HELP", title: "Request handyman" },
           { id: "HOME", title: "Home" },
         ],
+      },
+    });
+  }
+
+  if (message === "NAV:SERVICES") {
+    const skills = await supabase.from("skills").select("name").eq(
+      "active",
+      true,
+    ).order("name").limit(20);
+    if (skills.error) throw skills.error;
+    const names = (skills.data ?? []).map((item: { name: string }) =>
+      item.name
+    );
+
+    return json({
+      handled: true,
+      reply: names.length
+        ? `HandyConnect currently supports:\n\n${
+          names.map((name: string) => `• ${name}`).join("\n")
+        }`
+        : "Service browsing is temporarily unavailable. You can still describe the home repair you need.",
+      ui: {
+        type: "buttons",
+        body: "Ready when you are",
+        buttons: [
+          { id: "REQUEST_HELP", title: "Request handyman" },
+          { id: "CUST_HELP", title: "How it works" },
+          { id: "HOME", title: "Home" },
+        ],
+      },
+    });
+  }
+
+  if (message === "NAV:LEGAL") {
+    const body = [
+      "HandyConnect Terms & Privacy",
+      "You can read these documents at any time. Opening them does not change your consent status.",
+      "",
+      `Terms: ${TERMS_URL}`,
+      `Privacy Notice: ${PRIVACY_URL}`,
+    ].join("\n");
+    return json({
+      handled: true,
+      reply: body,
+      ui: {
+        type: "buttons",
+        body: "Terms and privacy links sent above.",
+        buttons: [{ id: "HOME", title: "Home" }],
       },
     });
   }

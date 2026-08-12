@@ -31,6 +31,21 @@ Full delivery testing requires two real WhatsApp numbers controlled by HandyConn
 
 These numbers are configured only after both are available. They must be tagged as test identities, excluded from marketplace analytics, restricted to test jobs and prevented from matching real users. One phone switching roles is useful for menu testing but is not a valid end-to-end marketplace test because it cannot prove delivery between two participants.
 
+### Repeating first-time consent tests
+
+Consent reset is an administrator-only database operation; it is deliberately not exposed as a WhatsApp command. Before resetting a designated pilot customer, confirm that the number belongs to HandyConnect and has no active real job. Then clear only that pilot's consent fields:
+
+```sql
+update public.customers
+set terms_accepted_at = null,
+    terms_version = null,
+    registration_status = 'onboarding',
+    updated_at = now()
+where phone = '<designated-pilot-number>';
+```
+
+Verify the affected row before starting the WhatsApp test. Never run this against a real customer or use a broad condition.
+
 ## Minimum identity assertions
 
 1. `Hi` alone creates no customer or provider profile.

@@ -20,6 +20,31 @@ const outOfScopePatterns = [
   /\b(car|vehicle|bakkie|motorbike|engine|tyre|windscreen)\b/i,
 ];
 
+// Correct only unambiguous, whole-word misspellings of supported household
+// assets/trades. The original customer description is still retained, and the
+// inferred service must still be confirmed before a request can be published.
+const commonServiceTypos: Readonly<Record<string, string>> = {
+  tiolet: "toilet",
+  toliet: "toilet",
+  toiet: "toilet",
+  pluming: "plumbing",
+  plummer: "plumber",
+  electical: "electrical",
+  eletrical: "electrical",
+  carpentar: "carpenter",
+  cabnet: "cabinet",
+  cieling: "ceiling",
+  guter: "gutter",
+  fawcet: "faucet",
+};
+
+export function normalizeServiceTypos(description: string): string {
+  return description.replace(/\b[\p{L}]+\b/gu, (word) => {
+    const replacement = commonServiceTypos[word.toLocaleLowerCase("en-ZA")];
+    return replacement ?? word;
+  });
+}
+
 // Positive evidence only: every entry names a supported household asset or
 // trade. Generic verbs such as fix/repair/install are deliberately absent.
 const services: Array<ServiceCandidate & { patterns: RegExp[] }> = [
@@ -154,7 +179,7 @@ const services: Array<ServiceCandidate & { patterns: RegExp[] }> = [
 ];
 
 export function classifyService(description: string): ServiceClassification {
-  const value = description.trim();
+  const value = normalizeServiceTypos(description.trim());
   if (prohibitedPatterns.some((pattern) => pattern.test(value))) {
     return { scope: "unsupported", candidate: null };
   }

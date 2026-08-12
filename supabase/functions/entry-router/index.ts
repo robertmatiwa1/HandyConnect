@@ -62,7 +62,7 @@ Deno.serve(async (request) => {
       "external_user_id",
       id,
     ).maybeSingle(),
-    supabase.from("conversation_sessions").select("state").eq(
+    supabase.from("conversation_sessions").select("flow,state").eq(
       "channel",
       input.channel ?? "whatsapp",
     ).eq("external_user_id", id).maybeSingle(),
@@ -90,6 +90,7 @@ Deno.serve(async (request) => {
     customer: customerState,
     provider: providerState,
     activeRole: preference.data?.active_role ?? null,
+    sessionFlow: session.data?.flow ?? null,
     sessionState: session.data?.state ?? null,
   };
   const decision = decideEntry(state, message);
@@ -191,8 +192,8 @@ Deno.serve(async (request) => {
     ? "REQUEST_HELP"
     : decision.kind === "provider_application"
     ? "ROLE_USE_HANDYMAN"
-    : decision.kind === "resume_onboarding"
-    ? (decision.role === "handyman" ? "ROLE_USE_HANDYMAN" : "ROLE_USE_CUSTOMER")
+    : decision.kind === "resume_onboarding" && decision.role !== "handyman"
+    ? "ROLE_USE_CUSTOMER"
     : message;
   const target = decision.kind === "customer_home"
     ? "customer-home-router"
@@ -200,6 +201,8 @@ Deno.serve(async (request) => {
     ? "handyman-router"
     : decision.kind === "customer_request"
     ? "job-intake-router"
+    : decision.kind === "resume_onboarding" && decision.role === "handyman"
+    ? "conversation-engine"
     : ["provider_application", "resume_onboarding"].includes(decision.kind)
     ? "role-router"
     : "marketplace-router";

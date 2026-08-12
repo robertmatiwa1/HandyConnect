@@ -1,4 +1,8 @@
-import { classifyService, serviceScope } from "./service-scope.ts";
+import {
+  classifyService,
+  normalizeServiceTypos,
+  serviceScope,
+} from "./service-scope.ts";
 
 function assertEquals(actual: unknown, expected: unknown) {
   if (actual !== expected) {
@@ -50,4 +54,33 @@ Deno.test("supported assets map to a named active service", () => {
     classifyService("my roof is leaking").candidate?.name,
     "Roofing",
   );
+});
+
+Deno.test("common high-confidence service typos are normalized", () => {
+  assertEquals(normalizeServiceTypos("leaking tiolet"), "leaking toilet");
+  assertEquals(
+    classifyService("leaking tiolet").candidate?.name,
+    "Plumbing",
+  );
+  assertEquals(classifyService("broken fawcet").candidate?.name, "Plumbing");
+  assertEquals(
+    classifyService("electical socket is broken").candidate?.name,
+    "Electrical",
+  );
+  assertEquals(
+    classifyService("damaged cieling").candidate?.name,
+    "Ceilings & Drywall",
+  );
+});
+
+Deno.test("typo tolerance does not turn unrelated text into a service", () => {
+  assertEquals(serviceScope("please help me"), "unclear");
+  assertEquals(serviceScope("repair my car engine"), "unsupported");
+  assertEquals(serviceScope("I want to repair my dick"), "unsupported");
+});
+
+Deno.test("home-menu non-job text is not direct service intent", () => {
+  for (const message of ["hi", "hello", "thanks", "okay", "more options"]) {
+    assertEquals(classifyService(message).scope, "unclear");
+  }
 });

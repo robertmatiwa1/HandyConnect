@@ -11,6 +11,7 @@ const guest = {
   customer: "none",
   provider: "none",
   activeRole: null,
+  sessionFlow: null,
   sessionState: null,
 } as const;
 
@@ -73,6 +74,45 @@ Deno.test("incomplete onboarding resumes on greeting", () => {
       sessionState: "customer_name",
     }, "hello").kind,
     "resume_onboarding",
+  );
+});
+
+Deno.test("provider name answer resumes the active onboarding conversation", () => {
+  assertEquals(
+    decideEntry({
+      ...guest,
+      provider: "onboarding",
+      activeRole: "handyman",
+      sessionFlow: "handyman_onboarding",
+      sessionState: "capture_name",
+    }, "Robert Matiwa"),
+    { kind: "resume_onboarding", role: "handyman" },
+  );
+});
+
+Deno.test("provider skill button resumes the active onboarding conversation", () => {
+  assertEquals(
+    decideEntry({
+      ...guest,
+      provider: "onboarding",
+      activeRole: "handyman",
+      sessionFlow: "handyman_onboarding",
+      sessionState: "capture_skills",
+    }, "HSKILL:plumbing"),
+    { kind: "resume_onboarding", role: "handyman" },
+  );
+});
+
+Deno.test("provider name resumes before a handyman row exists", () => {
+  assertEquals(
+    decideEntry({
+      ...guest,
+      provider: "none",
+      activeRole: "handyman",
+      sessionFlow: "handyman_onboarding",
+      sessionState: "capture_name",
+    }, "Robert Matiwa"),
+    { kind: "resume_onboarding", role: "handyman" },
   );
 });
 

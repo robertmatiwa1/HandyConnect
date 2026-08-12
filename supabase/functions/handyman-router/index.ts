@@ -6,16 +6,18 @@ type Incoming = {
   message?: string;
   media?: { id: string; type: string; mime_type?: string; filename?: string };
 };
-type Ui = {
-  type: "buttons";
-  body: string;
-  buttons: { id: string; title: string }[];
-} | {
-  type: "list";
-  body: string;
-  button: string;
-  rows: { id: string; title: string; description?: string }[];
-};
+type Ui =
+  | {
+      type: "buttons";
+      body: string;
+      buttons: { id: string; title: string }[];
+    }
+  | {
+      type: "list";
+      body: string;
+      button: string;
+      rows: { id: string; title: string; description?: string }[];
+    };
 const json = (body: unknown, status = 200) =>
   new Response(JSON.stringify(body), {
     status,
@@ -33,13 +35,88 @@ function key() {
 }
 const norm = (s: string) => s.trim().toLowerCase();
 function parseLocation(text: string) {
-  const p = text.split(",").map((x) => x.trim()).filter(Boolean);
+  const p = text
+    .split(",")
+    .map((x) => x.trim())
+    .filter(Boolean);
   return p.length < 2
     ? null
     : { suburb: p[0], city: p[1], province: p[2] ?? null };
 }
 function validEmail(text: string) {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(text.trim());
+}
+function safeFileName(value: string) {
+  return (
+    value.replace(/[^a-zA-Z0-9._-]/g, "_").slice(-90) || "identity-document"
+  );
+}
+function hex(buffer: ArrayBuffer) {
+  return [...new Uint8Array(buffer)]
+    .map((byte) => byte.toString(16).padStart(2, "0"))
+    .join("");
+}
+async function fetchVerificationMedia(media: NonNullable<Incoming["media"]>) {
+  const token = Deno.env.get("WHATSAPP_ACCESS_TOKEN") ?? "";
+  const version = Deno.env.get("WHATSAPP_GRAPH_VERSION") ?? "v26.0";
+  if (!token) throw new Error("whatsapp_media_unavailable");
+
+  const metadataResponse = await fetch(
+    `https://graph.facebook.com/${version}/${media.id}`,
+    { headers: { authorization: `Bearer ${token}` } },
+  );
+  if (!metadataResponse.ok) {
+    throw new Error(`verification_media_metadata_${metadataResponse.status}`);
+  }
+  const metadata = await metadataResponse.json();
+  const fileResponse = await fetch(metadata.url, {
+    headers: { authorization: `Bearer ${token}` },
+  });
+  if (!fileResponse.ok) {
+    throw new Error(`verification_media_download_${fileResponse.status}`);
+  }
+
+  const buffer = await fileResponse.arrayBuffer();
+  const mime = (
+    fileResponse.headers.get("content-type") ||
+    media.mime_type ||
+    ""
+  )
+    .split(";")[0]
+    .toLowerCase();
+  if (buffer.byteLength === 0 || buffer.byteLength > 8 * 1024 * 1024) {
+    throw new Error("verification_document_size_invalid");
+  }
+  if (!["image/jpeg", "image/png", "application/pdf"].includes(mime)) {
+    throw new Error("unsupported_verification_document");
+  }
+  return { buffer, mime };
+}
+async function archiveVerificationDocument(
+  s: any,
+  handymanId: string,
+  media: NonNullable<Incoming["media"]>,
+) {
+  const file = await fetchVerificationMedia(media);
+  const extension =
+    file.mime === "application/pdf"
+      ? "pdf"
+      : file.mime === "image/png"
+        ? "png"
+        : "jpg";
+  const path = `${handymanId}/${crypto.randomUUID()}-${safeFileName(
+    media.filename || `identity-document.${extension}`,
+  )}`;
+  const upload = await s.storage
+    .from("provider-verification")
+    .upload(path, file.buffer, { contentType: file.mime, upsert: false });
+  if (upload.error) throw upload.error;
+  return {
+    path,
+    mime: file.mime,
+    byteSize: file.buffer.byteLength,
+    sha256: hex(await crypto.subtle.digest("SHA-256", file.buffer)),
+  };
 }
 async function delegate(
   url: string,
@@ -73,27 +150,33 @@ function dashboardUi(): Ui {
     type: "list",
     body: "Handyman dashboard",
     button: "Open",
-    rows: [{
-      id: "H_CURRENT",
-      title: "Current job",
-      description: "Accepted work in progress",
-    }, {
-      id: "H_NEW",
-      title: "New jobs",
-      description: "Browse matching opportunities",
-    }, {
-      id: "H_HISTORY",
-      title: "Job history",
-      description: "Completed and cancelled work",
-    }, {
-      id: "H_AVAIL",
-      title: "Availability",
-      description: "Available or offline",
-    }, {
-      id: "H_PROFILE",
-      title: "Profile",
-      description: "Skills, areas and verification",
-    }],
+    rows: [
+      {
+        id: "H_CURRENT",
+        title: "Current job",
+        description: "Accepted work in progress",
+      },
+      {
+        id: "H_NEW",
+        title: "New jobs",
+        description: "Browse matching opportunities",
+      },
+      {
+        id: "H_HISTORY",
+        title: "Job history",
+        description: "Completed and cancelled work",
+      },
+      {
+        id: "H_AVAIL",
+        title: "Availability",
+        description: "Available or offline",
+      },
+      {
+        id: "H_PROFILE",
+        title: "Profile",
+        description: "Skills, areas and verification",
+      },
+    ],
   };
 }
 function profileUi(): Ui {
@@ -101,27 +184,33 @@ function profileUi(): Ui {
     type: "list",
     body: "Provider profile",
     button: "Manage profile",
-    rows: [{
-      id: "H_VERIFY",
-      title: "Verification",
-      description: "Identity and approval status",
-    }, {
-      id: "H_SKILLS",
-      title: "Skills",
-      description: "Services you can perform",
-    }, {
-      id: "H_AREAS",
-      title: "Service areas",
-      description: "Where you accept work",
-    }, {
-      id: "H_PLAN",
-      title: "Plan",
-      description: "Opportunities and Pro access",
-    }, {
-      id: "HANDYMAN_HOME",
-      title: "Dashboard",
-      description: "Back to provider dashboard",
-    }],
+    rows: [
+      {
+        id: "H_VERIFY",
+        title: "Verification",
+        description: "Identity and approval status",
+      },
+      {
+        id: "H_SKILLS",
+        title: "Skills",
+        description: "Services you can perform",
+      },
+      {
+        id: "H_AREAS",
+        title: "Service areas",
+        description: "Where you accept work",
+      },
+      {
+        id: "H_PLAN",
+        title: "Plan",
+        description: "Opportunities and Pro access",
+      },
+      {
+        id: "HANDYMAN_HOME",
+        title: "Dashboard",
+        description: "Back to provider dashboard",
+      },
+    ],
   };
 }
 function availabilityUi(): Ui {
@@ -138,43 +227,49 @@ function availabilityUi(): Ui {
     ],
   };
 }
-const categoryPages = [[
-  "appliance_repair",
-  "plumbing",
-  "electrical",
-  "general_handyman",
-  "carpentry",
-  "painting",
-  "locksmith",
-  "tiling",
-  "aircon_hvac",
-], [
-  "solar_inverter",
-  "cctv_security",
-  "gates_garage_doors",
-  "roofing",
-  "waterproofing",
-  "ceilings_drywall",
-  "flooring",
-  "glazing_windows",
-  "welding_metalwork",
-], [
-  "gardening_landscaping",
-  "pool_maintenance",
-  "paving",
-  "gutters",
-  "pest_control",
-  "furniture_assembly",
-  "moving_small_jobs",
-]];
+const categoryPages = [
+  [
+    "appliance_repair",
+    "plumbing",
+    "electrical",
+    "general_handyman",
+    "carpentry",
+    "painting",
+    "locksmith",
+    "tiling",
+    "aircon_hvac",
+  ],
+  [
+    "solar_inverter",
+    "cctv_security",
+    "gates_garage_doors",
+    "roofing",
+    "waterproofing",
+    "ceilings_drywall",
+    "flooring",
+    "glazing_windows",
+    "welding_metalwork",
+  ],
+  [
+    "gardening_landscaping",
+    "pool_maintenance",
+    "paving",
+    "gutters",
+    "pest_control",
+    "furniture_assembly",
+    "moving_small_jobs",
+  ],
+];
 async function skillMenu(s: any, page = 0): Promise<Ui> {
-  const { data } = await s.from("skills").select("code,name").eq(
-    "active",
-    true,
-  );
+  const { data } = await s
+    .from("skills")
+    .select("code,name")
+    .eq("active", true);
   const map = new Map((data ?? []).map((z: any) => [z.code, z]));
-  const rows = (categoryPages[page] ?? categoryPages[0]).map((c) => map.get(c))
-    .filter(Boolean).map((z: any) => ({
+  const rows = (categoryPages[page] ?? categoryPages[0])
+    .map((c) => map.get(c))
+    .filter(Boolean)
+    .map((z: any) => ({
       id: `H_ADD_SKILL:${z.code}`,
       title: z.name,
     }));
@@ -210,22 +305,29 @@ Deno.serve(async (req) => {
   } catch {
     return json({ error: "invalid_json" }, 400);
   }
-  const phone = input.external_user_id?.trim(), message = input.message?.trim();
+  const phone = input.external_user_id?.trim(),
+    message = input.message?.trim();
   if (!phone || !message) return json({ error: "missing_input" }, 400);
   const url = Deno.env.get("SUPABASE_URL") ?? "";
   try {
-    const hq = await s.from("handymen").select(
-      "id,full_name,business_name,email,verification_status,average_rating,completed_jobs,availability_status,available_until,active_job_id,availability_cooldown_until",
-    ).eq("phone", phone).maybeSingle();
+    const hq = await s
+      .from("handymen")
+      .select(
+        "id,full_name,business_name,email,verification_status,average_rating,completed_jobs,availability_status,available_until,active_job_id,availability_cooldown_until",
+      )
+      .eq("phone", phone)
+      .maybeSingle();
     if (hq.error) throw hq.error;
     let h = hq.data;
     if (!h) {
       const d = await delegate(url, k, input);
       return json(d.body, d.status);
     }
-    const session = await s.from("conversation_sessions").select(
-      "id,state,context",
-    ).eq("channel", input.channel ?? "whatsapp").eq("external_user_id", phone)
+    const session = await s
+      .from("conversation_sessions")
+      .select("id,state,context")
+      .eq("channel", input.channel ?? "whatsapp")
+      .eq("external_user_id", phone)
       .maybeSingle();
     if (session.data?.state === "handyman_router_verification_document") {
       if (!input.media?.id) {
@@ -235,22 +337,55 @@ Deno.serve(async (req) => {
             "Please attach a clear photo or document of your South African ID, passport or valid permit. Do not type the number into chat.",
         });
       }
+      let archived;
+      try {
+        archived = await archiveVerificationDocument(s, h.id, input.media);
+      } catch (error) {
+        const reason = String(error);
+        if (reason.includes("unsupported_verification_document")) {
+          return json({
+            ok: true,
+            reply: "Please send your document as a JPG, PNG or PDF file.",
+          });
+        }
+        if (reason.includes("verification_document_size_invalid")) {
+          return json({
+            ok: true,
+            reply:
+              "That document is empty or larger than 8 MB. Please send a smaller JPG, PNG or PDF file.",
+          });
+        }
+        throw error;
+      }
       const q = await s.from("handyman_verification_documents").insert({
         handyman_id: h.id,
         document_type: "identity",
         media_id: input.media.id,
         file_name: input.media.filename ?? null,
-        mime_type: input.media.mime_type ?? null,
+        mime_type: archived.mime,
+        storage_path: archived.path,
+        sha256: archived.sha256,
+        byte_size: archived.byteSize,
+        archived_at: new Date().toISOString(),
       });
-      if (q.error && q.error.code !== "23505") throw q.error;
-      await s.from("handymen").update({
-        verification_status: "pending",
-        updated_at: new Date().toISOString(),
-      }).eq("id", h.id);
-      await s.from("conversation_sessions").update({
-        state: "ready",
-        context: {},
-      }).eq("id", session.data.id);
+      if (q.error) {
+        await s.storage.from("provider-verification").remove([archived.path]);
+        if (q.error.code !== "23505") throw q.error;
+      }
+      await s
+        .from("handymen")
+        .update({
+          verification_status: "pending",
+          updated_at: new Date().toISOString(),
+        })
+        .eq("id", h.id);
+      await s
+        .from("conversation_sessions")
+        .update({
+          state: "ready",
+          context: {},
+        })
+        .eq("id", session.data.id);
       return json({
         ok: true,
         reply:
@@ -266,21 +401,26 @@ Deno.serve(async (req) => {
             "Please send a valid email address for payment receipts. Example: name@example.com",
         });
       }
-      await s.from("handymen").update({
-        email: message.trim(),
-        updated_at: new Date().toISOString(),
-      }).eq("id", h.id);
-      await s.from("conversation_sessions").update({
-        state: "ready",
-        context: {},
-      }).eq("id", session.data.id);
+      await s
+        .from("handymen")
+        .update({
+          email: message.trim(),
+          updated_at: new Date().toISOString(),
+        })
+        .eq("id", h.id);
+      await s
+        .from("conversation_sessions")
+        .update({
+          state: "ready",
+          context: {},
+        })
+        .eq("id", session.data.id);
       h = { ...h, email: message.trim() };
       const checkout = await startProCheckout(url, k, phone);
       if (checkout.body?.payment_url) {
         return json({
           ok: true,
-          reply:
-            `Your secure Pro payment link is ready:\n${checkout.body.payment_url}\n\nPro activates automatically after Paystack confirms payment.`,
+          reply: `Your secure Pro payment link is ready:\n${checkout.body.payment_url}\n\nPro activates automatically after Paystack confirms payment.`,
           ui: dashboardUi(),
         });
       }
@@ -301,20 +441,27 @@ Deno.serve(async (req) => {
             "Please send Suburb, City, Province. Example: Bellville, Cape Town, Western Cape",
         });
       }
-      await s.from("conversation_sessions").update({
-        state: "handyman_router_area_scope",
-        context: { pending_area: loc },
-      }).eq("id", session.data.id);
+      await s
+        .from("conversation_sessions")
+        .update({
+          state: "handyman_router_area_scope",
+          context: { pending_area: loc },
+        })
+        .eq("id", session.data.id);
       return json({
         ok: true,
         reply: `Area: ${loc.suburb}, ${loc.city}. How broadly do you work?`,
         ui: {
           type: "buttons",
           body: "Service coverage",
-          buttons: [{ id: "H_AREA_SCOPE:suburb", title: "This suburb" }, {
-            id: "H_AREA_SCOPE:city",
-            title: "Whole city",
-          }, { id: "H_AREA_SCOPE:province", title: "Province" }],
+          buttons: [
+            { id: "H_AREA_SCOPE:suburb", title: "This suburb" },
+            {
+              id: "H_AREA_SCOPE:city",
+              title: "Whole city",
+            },
+            { id: "H_AREA_SCOPE:province", title: "Province" },
+          ],
         },
       });
     }
@@ -339,10 +486,13 @@ Deno.serve(async (req) => {
         coverage_type: coverage,
       });
       if (ins.error && ins.error.code !== "23505") throw ins.error;
-      await s.from("conversation_sessions").update({
-        state: "ready",
-        context: {},
-      }).eq("id", session.data.id);
+      await s
+        .from("conversation_sessions")
+        .update({
+          state: "ready",
+          context: {},
+        })
+        .eq("id", session.data.id);
       return json({
         ok: true,
         reply: `Service area added: ${loc.suburb}, ${loc.city} (${coverage}).`,
@@ -355,19 +505,20 @@ Deno.serve(async (req) => {
     ) {
       return json({
         ok: true,
-        reply:
-          `Welcome back, ${h.full_name}.\nAvailability: ${h.availability_status}\nRating: ${
-            h.average_rating ?? 0
-          }/5 · ${
-            h.completed_jobs ?? 0
-          } completed\nVerification: ${h.verification_status}`,
+        reply: `Welcome back, ${h.full_name}.\nAvailability: ${h.availability_status}\nRating: ${
+          h.average_rating ?? 0
+        }/5 · ${
+          h.completed_jobs ?? 0
+        } completed\nVerification: ${h.verification_status}`,
         ui: dashboardUi(),
       });
     }
     if (message === "H_VERIFY") {
-      const docs = await s.from("handyman_verification_documents").select(
-        "document_type,status,submitted_at,review_notes",
-      ).eq("handyman_id", h.id).order("submitted_at", { ascending: false })
+      const docs = await s
+        .from("handyman_verification_documents")
+        .select("document_type,status,submitted_at,review_notes")
+        .eq("handyman_id", h.id)
+        .order("submitted_at", { ascending: false })
         .limit(5);
       if (h.verification_status === "verified") {
         return json({
@@ -390,25 +541,32 @@ Deno.serve(async (req) => {
       }
       return json({
         ok: true,
-        reply: h.verification_status === "rejected"
-          ? "Verification needs attention. You can submit a new identity document for review."
-          : "Verify your identity to unlock job opportunities. Attach a clear photo or document of your SA ID, passport or valid permit.",
+        reply:
+          h.verification_status === "rejected"
+            ? "Verification needs attention. You can submit a new identity document for review."
+            : "Verify your identity to unlock job opportunities. Attach a clear photo or document of your SA ID, passport or valid permit.",
         ui: {
           type: "buttons",
           body: "Verification",
-          buttons: [{ id: "H_SUBMIT_ID", title: "Submit ID" }, {
-            id: "HANDYMAN_HOME",
-            title: "Dashboard",
-          }],
+          buttons: [
+            { id: "H_SUBMIT_ID", title: "Submit ID" },
+            {
+              id: "HANDYMAN_HOME",
+              title: "Dashboard",
+            },
+          ],
         },
       });
     }
     if (message === "H_SUBMIT_ID") {
       if (session.data?.id) {
-        await s.from("conversation_sessions").update({
-          state: "handyman_router_verification_document",
-          context: {},
-        }).eq("id", session.data.id);
+        await s
+          .from("conversation_sessions")
+          .update({
+            state: "handyman_router_verification_document",
+            context: {},
+          })
+          .eq("id", session.data.id);
       }
       return json({
         ok: true,
@@ -425,10 +583,13 @@ Deno.serve(async (req) => {
           ui: {
             type: "buttons",
             body: "Complete verification",
-            buttons: [{ id: "H_VERIFY", title: "Verification" }, {
-              id: "HANDYMAN_HOME",
-              title: "Dashboard",
-            }],
+            buttons: [
+              { id: "H_VERIFY", title: "Verification" },
+              {
+                id: "HANDYMAN_HOME",
+                title: "Dashboard",
+              },
+            ],
           },
         });
       }
@@ -440,10 +601,14 @@ Deno.serve(async (req) => {
           ui: {
             type: "buttons",
             body: "Availability · Busy",
-            buttons: [{ id: "H_CURRENT", title: "Current job" }, {
-              id: "H_NEW",
-              title: "New jobs",
-            }, { id: "HANDYMAN_HOME", title: "Dashboard" }],
+            buttons: [
+              { id: "H_CURRENT", title: "Current job" },
+              {
+                id: "H_NEW",
+                title: "New jobs",
+              },
+              { id: "HANDYMAN_HOME", title: "Dashboard" },
+            ],
           },
         });
       }
@@ -453,21 +618,24 @@ Deno.serve(async (req) => {
       ) {
         return json({
           ok: true,
-          reply:
-            `Availability is temporarily paused after a provider cancellation. It unlocks at ${
-              new Intl.DateTimeFormat("en-ZA", {
-                timeZone: "Africa/Johannesburg",
-                hour: "2-digit",
-                minute: "2-digit",
-              }).format(new Date(h.availability_cooldown_until))
-            }.`,
+          reply: `Availability is temporarily paused after a provider cancellation. It unlocks at ${new Intl.DateTimeFormat(
+            "en-ZA",
+            {
+              timeZone: "Africa/Johannesburg",
+              hour: "2-digit",
+              minute: "2-digit",
+            },
+          ).format(new Date(h.availability_cooldown_until))}.`,
           ui: {
             type: "buttons",
             body: "Availability · Cool-down",
-            buttons: [{ id: "H_NEW", title: "Browse jobs" }, {
-              id: "HANDYMAN_HOME",
-              title: "Dashboard",
-            }],
+            buttons: [
+              { id: "H_NEW", title: "Browse jobs" },
+              {
+                id: "HANDYMAN_HOME",
+                title: "Dashboard",
+              },
+            ],
           },
         });
       }
@@ -493,10 +661,13 @@ Deno.serve(async (req) => {
           ui: {
             type: "buttons",
             body: "Availability locked",
-            buttons: [{ id: "H_CURRENT", title: "Current job" }, {
-              id: "HANDYMAN_HOME",
-              title: "Dashboard",
-            }],
+            buttons: [
+              { id: "H_CURRENT", title: "Current job" },
+              {
+                id: "HANDYMAN_HOME",
+                title: "Dashboard",
+              },
+            ],
           },
         });
       }
@@ -530,24 +701,26 @@ Deno.serve(async (req) => {
         const j = jobs[0];
         return json({
           ok: true,
-          reply:
-            `You're available for ${hours} hours. I found ${jobs.length} matching opportunity${
-              jobs.length === 1 ? "" : "ies"
-            }.\n\n${j.skill_name}: ${j.description}\n${j.suburb}, ${j.city}`,
+          reply: `You're available for ${hours} hours. I found ${jobs.length} matching opportunity${
+            jobs.length === 1 ? "" : "ies"
+          }.\n\n${j.skill_name}: ${j.description}\n${j.suburb}, ${j.city}`,
           ui: {
             type: "buttons",
             body: "Would you like this job?",
-            buttons: [{ id: `HJOB_MATCH:${j.match_id}`, title: "View job" }, {
-              id: "H_NEW",
-              title: "New jobs",
-            }, { id: "HANDYMAN_HOME", title: "Dashboard" }],
+            buttons: [
+              { id: `HJOB_MATCH:${j.match_id}`, title: "View job" },
+              {
+                id: "H_NEW",
+                title: "New jobs",
+              },
+              { id: "HANDYMAN_HOME", title: "Dashboard" },
+            ],
           },
         });
       }
       return json({
         ok: true,
-        reply:
-          `You're available for the next ${hours} hours. Relevant jobs can now be offered automatically.`,
+        reply: `You're available for the next ${hours} hours. Relevant jobs can now be offered automatically.`,
         ui: dashboardUi(),
       });
     }
@@ -560,10 +733,13 @@ Deno.serve(async (req) => {
           ui: {
             type: "buttons",
             body: "Availability locked",
-            buttons: [{ id: "H_CURRENT", title: "Current job" }, {
-              id: "HANDYMAN_HOME",
-              title: "Dashboard",
-            }],
+            buttons: [
+              { id: "H_CURRENT", title: "Current job" },
+              {
+                id: "HANDYMAN_HOME",
+                title: "Dashboard",
+              },
+            ],
           },
         });
       }
@@ -585,13 +761,14 @@ Deno.serve(async (req) => {
       return json(d.body, d.status);
     }
     if (message === "H_PROFILE") {
-      const areas = await s.from("service_areas").select(
-        "suburb,city,province,coverage_type",
-      ).eq("handyman_id", h.id);
-      const hs = await s.from("handyman_skills").select("skill_id").eq(
-        "handyman_id",
-        h.id,
-      );
+      const areas = await s
+        .from("service_areas")
+        .select("suburb,city,province,coverage_type")
+        .eq("handyman_id", h.id);
+      const hs = await s
+        .from("handyman_skills")
+        .select("skill_id")
+        .eq("handyman_id", h.id);
       const ids = (hs.data ?? []).map((x: any) => x.skill_id);
       const skills = ids.length
         ? await s.from("skills").select("id,name").in("id", ids)
@@ -607,9 +784,9 @@ Deno.serve(async (req) => {
         }/5 (${h.completed_jobs ?? 0} completed)\nSkills: ${
           (skills.data ?? []).map((x: any) => x.name).join(", ") || "None"
         }\nAreas: ${
-          (areas.data ?? []).map((a: any) =>
-            `${a.suburb}, ${a.city} (${a.coverage_type})`
-          ).join("; ") || "None"
+          (areas.data ?? [])
+            .map((a: any) => `${a.suburb}, ${a.city} (${a.coverage_type})`)
+            .join("; ") || "None"
         }`,
         ui: profileUi(),
       });
@@ -630,7 +807,10 @@ Deno.serve(async (req) => {
     }
     if (message.startsWith("H_ADD_SKILL:")) {
       const code = message.slice(12);
-      const sk = await s.from("skills").select("id,name").eq("code", code)
+      const sk = await s
+        .from("skills")
+        .select("id,name")
+        .eq("code", code)
         .maybeSingle();
       if (!sk.data) {
         return json({
@@ -651,34 +831,39 @@ Deno.serve(async (req) => {
       });
     }
     if (message === "H_AREAS") {
-      const a = await s.from("service_areas").select(
-        "suburb,city,province,coverage_type",
-      ).eq("handyman_id", h.id);
+      const a = await s
+        .from("service_areas")
+        .select("suburb,city,province,coverage_type")
+        .eq("handyman_id", h.id);
       return json({
         ok: true,
         reply: (a.data ?? []).length
-          ? `Your service areas:\n${
-            (a.data ?? []).map((x: any) =>
-              `• ${x.suburb}, ${x.city} — ${x.coverage_type}`
-            ).join("\n")
-          }`
+          ? `Your service areas:\n${(a.data ?? [])
+              .map((x: any) => `• ${x.suburb}, ${x.city} — ${x.coverage_type}`)
+              .join("\n")}`
           : "You haven't added a service area yet.",
         ui: {
           type: "buttons",
           body: "Service areas",
-          buttons: [{ id: "H_ADD_AREA", title: "Add area" }, {
-            id: "HANDYMAN_HOME",
-            title: "Dashboard",
-          }],
+          buttons: [
+            { id: "H_ADD_AREA", title: "Add area" },
+            {
+              id: "HANDYMAN_HOME",
+              title: "Dashboard",
+            },
+          ],
         },
       });
     }
     if (message === "H_ADD_AREA") {
       if (session.data?.id) {
-        await s.from("conversation_sessions").update({
-          state: "handyman_router_add_area",
-          context: {},
-        }).eq("id", session.data.id);
+        await s
+          .from("conversation_sessions")
+          .update({
+            state: "handyman_router_add_area",
+            context: {},
+          })
+          .eq("id", session.data.id);
       }
       return json({
         ok: true,
@@ -687,53 +872,68 @@ Deno.serve(async (req) => {
       });
     }
     if (message === "H_PLAN") {
-      const e = await s.from("entitlements").select(
-        "entitlement_type,status,valid_until",
-      ).eq("handyman_id", h.id).eq("status", "active");
-      const usage = await s.from("job_matches").select("id", {
-        count: "exact",
-        head: true,
-      }).eq("handyman_id", h.id).gte(
-        "offered_at",
-        new Date(new Date().getFullYear(), new Date().getMonth(), 1)
-          .toISOString(),
-      );
-      const pro = (e.data ?? []).some((x: any) =>
-        x.entitlement_type === "pro_access" &&
-        (!x.valid_until || new Date(x.valid_until) > new Date())
+      const e = await s
+        .from("entitlements")
+        .select("entitlement_type,status,valid_until")
+        .eq("handyman_id", h.id)
+        .eq("status", "active");
+      const usage = await s
+        .from("job_matches")
+        .select("id", {
+          count: "exact",
+          head: true,
+        })
+        .eq("handyman_id", h.id)
+        .gte(
+          "offered_at",
+          new Date(
+            new Date().getFullYear(),
+            new Date().getMonth(),
+            1,
+          ).toISOString(),
+        );
+      const pro = (e.data ?? []).some(
+        (x: any) =>
+          x.entitlement_type === "pro_access" &&
+          (!x.valid_until || new Date(x.valid_until) > new Date()),
       );
       const used = usage.count ?? 0;
       if (pro) {
         return json({
           ok: true,
-          reply:
-            `Plan: Pro\nOpportunities this month: ${used}\nLimit: Unlimited while Pro is active`,
+          reply: `Plan: Pro\nOpportunities this month: ${used}\nLimit: Unlimited while Pro is active`,
           ui: dashboardUi(),
         });
       }
       return json({
         ok: true,
-        reply:
-          `Plan: Free\nOpportunities used this month: ${used}/3\nRemaining: ${
-            Math.max(0, 3 - used)
-          }\n\nAfter 3 genuine opportunities, matching pauses until next month or you upgrade. Pro is R99/month.`,
+        reply: `Plan: Free\nOpportunities used this month: ${used}/3\nRemaining: ${Math.max(
+          0,
+          3 - used,
+        )}\n\nAfter 3 genuine opportunities, matching pauses until next month or you upgrade. Pro is R99/month.`,
         ui: {
           type: "buttons",
           body: "Plan options",
-          buttons: [{ id: "H_UPGRADE_PRO", title: "Upgrade to Pro" }, {
-            id: "HANDYMAN_HOME",
-            title: "Dashboard",
-          }],
+          buttons: [
+            { id: "H_UPGRADE_PRO", title: "Upgrade to Pro" },
+            {
+              id: "HANDYMAN_HOME",
+              title: "Dashboard",
+            },
+          ],
         },
       });
     }
     if (message === "H_UPGRADE_PRO") {
       if (!h.email) {
         if (session.data?.id) {
-          await s.from("conversation_sessions").update({
-            state: "handyman_router_billing_email",
-            context: {},
-          }).eq("id", session.data.id);
+          await s
+            .from("conversation_sessions")
+            .update({
+              state: "handyman_router_billing_email",
+              context: {},
+            })
+            .eq("id", session.data.id);
         }
         return json({
           ok: true,
@@ -745,8 +945,7 @@ Deno.serve(async (req) => {
       if (checkout.body?.payment_url) {
         return json({
           ok: true,
-          reply:
-            `Your secure Pro payment link is ready:\n${checkout.body.payment_url}\n\nPro activates automatically after Paystack confirms payment.`,
+          reply: `Your secure Pro payment link is ready:\n${checkout.body.payment_url}\n\nPro activates automatically after Paystack confirms payment.`,
           ui: dashboardUi(),
         });
       }

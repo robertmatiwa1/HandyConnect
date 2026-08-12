@@ -1,4 +1,5 @@
 import { createClient } from "@supabase/supabase-js";
+import { classifyService } from "../_shared/service-scope.ts";
 
 type Incoming = {
   channel?: string;
@@ -30,6 +31,18 @@ const isGreeting = (message: string) =>
   ["hi", "hello", "hey", "menu", "start", "home"].includes(
     message.toLowerCase(),
   ) || message === "HOME";
+
+async function call(url: string, key: string, target: string, input: unknown) {
+  const response = await fetch(`${url}/functions/v1/${target}`, {
+    method: "POST",
+    headers: { apikey: key, "content-type": "application/json" },
+    body: JSON.stringify(input),
+  });
+  return {
+    status: response.status,
+    body: await response.json().catch(() => ({ handled: false })),
+  };
+}
 
 const chooseRoleUi = {
   type: "buttons",
@@ -136,7 +149,7 @@ Deno.serve(async (request) => {
     },
   });
 
-  const [customer, handyman, preference] = await Promise.all([
+  const [customer, handyman, preference, session] = await Promise.all([
     supabase.from("customers").select(
       "id,full_name,preferred_name,registration_status,terms_accepted_at",
     ).eq(
@@ -151,7 +164,15 @@ Deno.serve(async (request) => {
       "external_user_id",
       phone,
     ).maybeSingle(),
+    supabase.from("conversation_sessions").select("flow,state").eq(
+      "channel",
+      input.channel ?? "whatsapp",
+    ).eq("external_user_id", phone).maybeSingle(),
   ]);
+
+  for (const result of [customer, handyman, preference, session]) {
+    if (result.error) throw result.error;
+  }
 
   const hasCustomer = Boolean(customer.data);
   const hasHandyman = Boolean(handyman.data);
@@ -386,6 +407,42 @@ Deno.serve(async (request) => {
         buttons: [{ id: "HOME", title: "Home" }],
       },
     });
+  }
+
+  // The production webhook still sends non-pilot identities through this
+  // router before the conversation engine. Once provider onboarding is
+  // active, every answer belongs to that conversation even though the
+  // handymen row is intentionally not created until the form is complete.
+  // Resume it before the generic "registration incomplete" gate below.
+  if (
+    activeRole === "handyman" &&
+    session.data?.flow === "handyman_onboarding" &&
+    session.data?.state &&
+    session.data.state !== "ready"
+  ) {
+    return json({
+      handled: true,
+      delegate: "conversation-engine",
+      delegate_message: message,
+    });
+  }
+
+  // A clear supported service description typed at the customer home screen
+  // is itself a request intent. Keep later flow answers with their active
+  // router, and pass the customer's original description through unchanged.
+  const atCustomerHome = !session.data?.state || session.data.state === "ready";
+  const directRequest = classifyService(message);
+  if (
+    activeRole === "customer" && customerReady && atCustomerHome &&
+    directRequest.scope === "supported"
+  ) {
+    const started = await call(url, key, "job-intake-router", {
+      ...input,
+      message: "REQUEST_HELP",
+    });
+    if (started.status >= 300) return json(started.body, started.status);
+    const continued = await call(url, key, "job-intake-router", input);
+    return json({ ...continued.body, handled: true }, continued.status);
   }
 
   if (!isGreeting(message)) {

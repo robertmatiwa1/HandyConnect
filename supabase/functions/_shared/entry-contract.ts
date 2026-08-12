@@ -3,6 +3,7 @@ export type AccountState = {
   customer: "none" | "onboarding" | "active";
   provider: "none" | "onboarding" | "active" | "verified";
   activeRole: "customer" | "handyman" | null;
+  sessionFlow: string | null;
   sessionState: string | null;
 };
 
@@ -116,6 +117,18 @@ export function decideEntry(
       };
     }
     return { kind: "guest_home", clearSession: true };
+  }
+
+  // Once provider onboarding has started, its answers belong to the active
+  // conversation. Do not reinterpret a name, business name, location, or
+  // skill button as a fresh provider-registration request.
+  if (
+    state.activeRole === "handyman" &&
+    state.sessionFlow === "handyman_onboarding" &&
+    state.sessionState &&
+    state.sessionState !== "ready"
+  ) {
+    return { kind: "resume_onboarding", role: "handyman" };
   }
 
   // Stable domain commands are authorized here but interpreted by their domain router.

@@ -105,7 +105,7 @@ Deno.serve(async (req) => {
         s
           .from("jobs")
           .select(
-            "id,description,suburb,city,status,created_at,customers(full_name,phone),skills(name)",
+            "id,description,suburb,city,status,created_at,customers(full_name,phone),skills!jobs_skill_id_fkey(name)",
           )
           .order("created_at", { ascending: false })
           .limit(50),

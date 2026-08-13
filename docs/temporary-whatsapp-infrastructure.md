@@ -8,7 +8,7 @@ Current temporary resources:
 
 - WhatsApp Business Account display/account name: `Stokvel-bot-ledger`
 - WhatsApp Business Account ID: `2038147740918393`
-- Registered number: `+27 67 325 5217`
+- Registered number: `+27 71 289 0446`
 - Phone Number ID: `1088447464359897`
 
 This is an operational bridge, not the intended long-term identity architecture.

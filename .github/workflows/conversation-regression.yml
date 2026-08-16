@@ -1,0 +1,46 @@
+name: Conversation Regression
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'supabase/functions/**'
+      - 'tests/conversations/**'
+      - '.github/workflows/conversation-regression.yml'
+  pull_request:
+    paths:
+      - 'supabase/functions/**'
+      - 'tests/conversations/**'
+      - '.github/workflows/conversation-regression.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  conversation-regression:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Deno
+        uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+
+      - name: Run shared conversation unit tests
+        run: |
+          deno test \
+            supabase/functions/_shared/location-input_test.ts \
+            supabase/functions/_shared/service-scope_test.ts \
+            supabase/functions/_shared/entry-contract_test.ts \
+            supabase/functions/_shared/job-label_test.ts \
+            supabase/functions/notification-dispatcher/text_test.ts
+
+      - name: Run incident regression tests
+        run: deno test tests/conversations/incident-regressions_test.ts
+
+      - name: Validate transcript fixtures
+        run: deno test tests/conversations/transcript-fixtures_test.ts

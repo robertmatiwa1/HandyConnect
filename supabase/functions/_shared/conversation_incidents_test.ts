@@ -1,5 +1,5 @@
 import { classifyService } from "./service-scope.ts";
-import { parseLocationInput } from "./location-input.ts";
+import { parseHumanLocation } from "./location-input.ts";
 import { decideEntry } from "./entry-contract.ts";
 
 function assert(condition: unknown, message: string) {
@@ -7,7 +7,7 @@ function assert(condition: unknown, message: string) {
 }
 
 Deno.test("Reuben location: Claremont Capetown is accepted", () => {
-  const location = parseLocationInput("Claremont Capetown");
+  const location = parseHumanLocation("Claremont Capetown");
   assert(location !== null, "location should parse");
   assert(location?.suburb === "Claremont", "suburb should be Claremont");
   assert(location?.city === "Cape Town", "city should normalize to Cape Town");

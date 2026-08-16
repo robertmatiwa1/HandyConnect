@@ -1,0 +1,116 @@
+[
+  {
+    "name": "reuben_provider_location_and_terms_recovery",
+    "role": "handyman",
+    "messages": [
+      "Hello! Can I get more info on this? I am an electrian",
+      "ROLE_USE_HANDYMAN",
+      "Reuben Matiwa",
+      "Tina Electrical Solutions",
+      "Electrical",
+      "Claremont Capetown"
+    ],
+    "assertions": [
+      "location_input_is_accepted",
+      "progress_is_preserved",
+      "terms_are_explicit",
+      "registration_does_not_restart",
+      "verification_is_next_step"
+    ]
+  },
+  {
+    "name": "john_provider_location_resume",
+    "role": "handyman",
+    "messages": [
+      "ROLE_USE_HANDYMAN",
+      "John",
+      "LAILA CONSTRUCTION",
+      "Ceilings & Drywall",
+      "Bellville Cape Town",
+      "continue"
+    ],
+    "assertions": [
+      "location_input_is_accepted",
+      "resume_uses_saved_progress",
+      "no_duplicate_provider_record"
+    ]
+  },
+  {
+    "name": "fridge_customer_resume",
+    "role": "customer",
+    "messages": [
+      "REQUEST_HELP",
+      "my fridge is broken",
+      "CONFIRM_SERVICE",
+      "Langa Cape Town",
+      "JI_URGENT",
+      "JI_SKIP_PHOTO",
+      "JI_SUBMIT",
+      "continue"
+    ],
+    "assertions": [
+      "service_is_appliance_repair",
+      "location_input_is_accepted",
+      "resume_returns_to_unfinished_request",
+      "no_duplicate_job"
+    ]
+  },
+  {
+    "name": "unsupported_request_blocked",
+    "role": "customer",
+    "messages": ["REQUEST_HELP", "my wife is pregnant"],
+    "assertions": ["request_is_not_matchable", "no_job_created"]
+  },
+  {
+    "name": "mixed_trade_request_is_ambiguous",
+    "role": "customer",
+    "messages": ["REQUEST_HELP", "my toilet leaks and my socket is broken"],
+    "assertions": ["request_requires_clarification", "no_job_created"]
+  },
+  {
+    "name": "stale_accept_button",
+    "role": "handyman",
+    "messages": ["ACCEPT:expired-match-id"],
+    "assertions": ["no_assignment_created", "safe_current_state_response"]
+  },
+  {
+    "name": "duplicate_accept",
+    "role": "handyman",
+    "messages": ["ACCEPT:valid-match-id", "ACCEPT:valid-match-id"],
+    "assertions": ["single_assignment", "second_action_is_replay_safe"]
+  },
+  {
+    "name": "duplicate_arrival_start_complete",
+    "role": "marketplace",
+    "messages": [
+      "ARRIVED:job-id",
+      "ARRIVED:job-id",
+      "CONFIRM_START:job-id",
+      "CONFIRM_START:job-id",
+      "COMPLETE:job-id",
+      "COMPLETE:job-id",
+      "CONFIRM_COMPLETE:job-id",
+      "CONFIRM_COMPLETE:job-id"
+    ],
+    "assertions": [
+      "single_arrival_event",
+      "single_start_event",
+      "single_completion_request_event",
+      "single_completion_event"
+    ]
+  },
+  {
+    "name": "unverified_provider_resume",
+    "role": "handyman",
+    "messages": ["hi"],
+    "precondition": "registered_unverified_provider",
+    "assertions": ["verification_is_primary_resume_action"]
+  },
+  {
+    "name": "active_job_provider_resume",
+    "role": "handyman",
+    "messages": ["hello"],
+    "precondition": "verified_provider_with_active_job",
+    "assertions": ["current_job_is_primary_resume_action"]
+  }
+]

@@ -1,5 +1,11 @@
-alter table public.service_scope_regression_samples enable row level security;
-revoke all on table public.service_scope_regression_samples from anon, authenticated;
+do $$
+begin
+  if to_regclass('public.service_scope_regression_samples') is not null then
+    execute 'alter table public.service_scope_regression_samples enable row level security';
+    execute 'revoke all on table public.service_scope_regression_samples from anon, authenticated';
+  end if;
+end
+$$;
 
 alter function public.enforce_confirmed_service_before_matching() set search_path = pg_catalog, public;
 

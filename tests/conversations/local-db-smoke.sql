@@ -4,20 +4,18 @@
 \set ON_ERROR_STOP on
 
 -- Core marketplace tables must exist after all migrations apply.
-select to_regclass('public.jobs') as jobs_table \gset
-\if :'jobs_table' = ''
-  \quit 1
-\endif
-
-select to_regclass('public.job_assignments') as assignments_table \gset
-\if :'assignments_table' = ''
-  \quit 1
-\endif
-
-select to_regclass('public.notification_outbox') as notification_table \gset
-\if :'notification_table' = ''
-  \quit 1
-\endif
+do $$
+begin
+  if to_regclass('public.jobs') is null then
+    raise exception 'Missing public.jobs';
+  end if;
+  if to_regclass('public.job_assignments') is null then
+    raise exception 'Missing public.job_assignments';
+  end if;
+  if to_regclass('public.notification_outbox') is null then
+    raise exception 'Missing public.notification_outbox';
+  end if;
+end $$;
 
 -- Exactly one assignment per job is a hard marketplace invariant.
 do $$
@@ -51,10 +49,15 @@ end $$;
 do $$
 begin
   if not exists (
-    select 1 from pg_trigger
-    where tgrelid = 'public.jobs'::regclass
-      and tgname = 'trg_jobs_confirmed_service_before_matching'
-      and not tgisinternal
+    select 1
+    from pg_trigger t
+    join pg_proc p on p.oid = t.tgfoid
+    join pg_namespace n on n.oid = p.pronamespace
+    where t.tgrelid = 'public.jobs'::regclass
+      and t.tgname = 'trg_enforce_confirmed_service_before_matching'
+      and not t.tgisinternal
+      and n.nspname = 'public'
+      and p.proname = 'enforce_confirmed_service_before_matching'
   ) then
     raise exception 'Missing confirmed-service enforcement trigger';
   end if;

@@ -21,13 +21,34 @@ alter table public.handymen
   add constraint handymen_registration_status_check
   check (registration_status in ('onboarding', 'active', 'closed'));
 
--- Preserve legacy profiles and jobs, but require an explicit terms acknowledgement
--- before either role can perform further marketplace actions.
-update public.customers
-set registration_status = case
-  when onboarding_completed_at is not null and full_name is not null then 'active'
-  else 'onboarding'
-end;
+-- Preserve legacy profiles and jobs. Some production-era schemas had an
+-- onboarding_completed_at column on customers, but clean rebuilds may not.
+-- Derive activity from the strongest field guaranteed by the foundation schema.
+do $$
+begin
+  if exists (
+    select 1
+    from information_schema.columns
+    where table_schema = 'public'
+      and table_name = 'customers'
+      and column_name = 'onboarding_completed_at'
+  ) then
+    execute $sql$
+      update public.customers
+      set registration_status = case
+        when onboarding_completed_at is not null and full_name is not null then 'active'
+        else 'onboarding'
+      end
+    $sql$;
+  else
+    update public.customers
+    set registration_status = case
+      when full_name is not null then 'active'
+      else 'onboarding'
+    end;
+  end if;
+end
+$$;
 
 update public.handymen
 set registration_status = 'active';

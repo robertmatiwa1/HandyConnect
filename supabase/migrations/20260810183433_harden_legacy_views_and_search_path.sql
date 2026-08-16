@@ -1,36 +1,36 @@
-alter view public.assignment_schedule_ops set (security_invoker = true);
-alter view public.handyman_reliability_ops set (security_invoker = true);
-alter view public.notification_delivery_ops set (security_invoker = true);
-alter view public.job_evidence_ops set (security_invoker = true);
-alter view public.customer_job_status set (security_invoker = true);
-alter view public.dispute_case_ops set (security_invoker = true);
-alter view public.handyman_public_profiles set (security_invoker = true);
-alter view public.handyman_job_status set (security_invoker = true);
+do $$
+declare
+  view_name text;
+  views text[] := array[
+    'assignment_schedule_ops',
+    'handyman_reliability_ops',
+    'notification_delivery_ops',
+    'job_evidence_ops',
+    'customer_job_status',
+    'dispute_case_ops',
+    'handyman_public_profiles',
+    'handyman_job_status'
+  ];
+begin
+  foreach view_name in array views loop
+    if to_regclass(format('public.%I', view_name)) is not null then
+      execute format('alter view public.%I set (security_invoker = true)', view_name);
+      execute format('revoke all on public.%I from public, anon, authenticated', view_name);
+      execute format('grant select on public.%I to service_role', view_name);
+    end if;
+  end loop;
+end $$;
 
-revoke all on public.assignment_schedule_ops from public, anon, authenticated;
-revoke all on public.handyman_reliability_ops from public, anon, authenticated;
-revoke all on public.notification_delivery_ops from public, anon, authenticated;
-revoke all on public.job_evidence_ops from public, anon, authenticated;
-revoke all on public.customer_job_status from public, anon, authenticated;
-revoke all on public.dispute_case_ops from public, anon, authenticated;
-revoke all on public.handyman_public_profiles from public, anon, authenticated;
-revoke all on public.handyman_job_status from public, anon, authenticated;
-
-grant select on public.assignment_schedule_ops to service_role;
-grant select on public.handyman_reliability_ops to service_role;
-grant select on public.notification_delivery_ops to service_role;
-grant select on public.job_evidence_ops to service_role;
-grant select on public.customer_job_status to service_role;
-grant select on public.dispute_case_ops to service_role;
-grant select on public.handyman_public_profiles to service_role;
-grant select on public.handyman_job_status to service_role;
-
-alter function public.block_job_evidence_mutation()
-  set search_path = pg_catalog, public;
-
-revoke all on function public.block_job_evidence_mutation()
-  from public, anon, authenticated;
-grant execute on function public.block_job_evidence_mutation()
-  to service_role;
+do $$
+begin
+  if to_regprocedure('public.block_job_evidence_mutation()') is not null then
+    alter function public.block_job_evidence_mutation()
+      set search_path = pg_catalog, public;
+    revoke all on function public.block_job_evidence_mutation()
+      from public, anon, authenticated;
+    grant execute on function public.block_job_evidence_mutation()
+      to service_role;
+  end if;
+end $$;
 
 notify pgrst, 'reload schema';

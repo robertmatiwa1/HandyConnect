@@ -1,0 +1,31 @@
+name: Add Ops Navigation
+on:
+  push:
+    paths:
+      - '.github/workflows/add-ops-navigation.yml'
+permissions:
+  contents: write
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Add Dispatch and Supply navigation
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          p=Path('supabase/functions/admin-dashboard/index.ts')
+          s=p.read_text()
+          old='<div class="topnav"><a href="/functions/v1/ops-recovery">Recovery</a><a href="?logout=1">Sign out</a></div>'
+          new='<div class="topnav"><a href="/functions/v1/ops-dispatch">Dispatch</a><a href="/functions/v1/ops-supply">Supply</a><a href="/functions/v1/ops-recovery">Recovery</a><a href="?logout=1">Sign out</a></div>'
+          if old not in s:
+              raise SystemExit('Expected navigation block not found')
+          p.write_text(s.replace(old,new,1))
+          PY
+      - name: Commit navigation
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add supabase/functions/admin-dashboard/index.ts
+          git commit -m "Add Dispatch and Supply to Main Ops navigation"
+          git push

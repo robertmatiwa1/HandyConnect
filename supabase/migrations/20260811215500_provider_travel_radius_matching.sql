@@ -34,6 +34,15 @@ alter table public.jobs
   add column if not exists latitude double precision,
   add column if not exists longitude double precision;
 
+-- Matching already honors temporary reliability restrictions. Ensure the field
+-- exists before the candidate function is compiled during a clean rebuild.
+alter table public.handymen
+  add column if not exists reliability_restricted_until timestamptz;
+
+create index if not exists idx_handymen_reliability_restricted_until
+  on public.handymen(reliability_restricted_until)
+  where reliability_restricted_until is not null;
+
 alter table public.service_areas drop constraint if exists service_areas_base_latitude_check;
 alter table public.service_areas add constraint service_areas_base_latitude_check
   check (base_latitude is null or base_latitude between -90 and 90);

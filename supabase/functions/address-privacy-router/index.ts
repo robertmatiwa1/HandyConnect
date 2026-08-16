@@ -1,151 +1,27 @@
 import { createClient } from "@supabase/supabase-js";
 
-type Incoming = {
-  channel?: string;
-  external_user_id?: string;
-  external_message_id?: string;
-  message?: string;
-};
-
-const json = (body: unknown, status = 200) =>
-  new Response(JSON.stringify(body), {
-    status,
-    headers: { "content-type": "application/json; charset=utf-8" },
-  });
-
-function secretKey() {
-  const raw = Deno.env.get("SUPABASE_SECRET_KEYS") ?? "";
-  if (raw) {
-    try {
-      const parsed = JSON.parse(raw);
-      if (typeof parsed.default === "string") return parsed.default;
-    } catch {}
-  }
-  return Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
-}
-
-const title = (s: string) => s.trim().replace(/\s+/g, " ").replace(/\b\w/g, c => c.toUpperCase());
-function parseLocation(text: string) {
-  const raw = text.trim().replace(/\s+/g, " ");
-  if (!raw) return null;
-  const comma = raw.split(",").map(x => x.trim()).filter(Boolean);
-  if (comma.length >= 2) return { suburb: title(comma[0]), city: title(comma[1].replace(/^capetown$/i,"Cape Town")), province: comma[2] ? title(comma[2]) : null };
-
-  const normalized = raw.toLowerCase().replace(/capetown/g, "cape town");
-  const cities = ["cape town","johannesburg","pretoria","durban","gqeberha","port elizabeth","east london","bloemfontein","polokwane","mbombela","kimberley","potchefstroom","stellenbosch","paarl"];
-  for (const city of cities.sort((a,b)=>b.length-a.length)) {
-    if (normalized === city) return null;
-    if (normalized.endsWith(" " + city)) {
-      const suburb = normalized.slice(0, -(city.length + 1)).trim();
-      if (suburb.length >= 2) return { suburb: title(suburb), city: title(city), province: null };
-    }
-  }
-  const capeTownSuburbs = new Set(["claremont","constantia","langa","bellville","pinelands","rondebosch","newlands","observatory","woodstock","salt river","plumstead","wynberg","kenilworth","mitchells plain","khayelitsha","gugulethu","nyanga","parow","goodwood","brackenfell","durbanville","table view","milnerton","century city","sea point","green point","camps bay","hout bay","muizenberg","fish hoek","somerset west","strand"]);
-  if (capeTownSuburbs.has(normalized)) return { suburb: title(normalized), city: "Cape Town", province: "Western Cape" };
-  return null;
-}
-
-const urgencyUi = {
-  type: "buttons",
-  body: "When do you need help?",
-  buttons: [
-    { id: "JI_URGENT", title: "As soon as possible" },
-    { id: "JI_TODAY", title: "Today" },
-    { id: "JI_FLEXIBLE", title: "I'm flexible" },
-  ],
-};
-
-async function call(url: string, key: string, target: string, input: Incoming) {
-  const response = await fetch(`${url}/functions/v1/${target}`, {
-    method: "POST",
-    headers: { apikey: key, "content-type": "application/json" },
-    body: JSON.stringify(input),
-  });
-  if (!response.ok) return { handled: false };
-  return await response.json();
-}
-
-async function updateSession(supabase: any, id: string, values: Record<string, unknown>) {
-  const result = await supabase.from("conversation_sessions").update(values).eq("id", id);
-  if (result.error) throw result.error;
-}
-
-Deno.serve(async (request) => {
-  if (request.method !== "POST") return json({ error: "method_not_allowed" }, 405);
-  const key = secretKey();
-  const url = Deno.env.get("SUPABASE_URL") ?? "";
-  if (!key || !url || request.headers.get("apikey") !== key) return json({ error: "unauthorized" }, 401);
-  let input: Incoming;
-  try { input = await request.json(); } catch { return json({ error: "invalid_json" }, 400); }
-  const phone = input.external_user_id?.trim();
-  const message = input.message?.trim() ?? "";
-  const channel = input.channel ?? "whatsapp";
-  if (!phone) return json({ handled: false });
-  const supabase = createClient(url, key, { auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false } });
-  try {
-    if (input.external_message_id) {
-      const claim = await supabase.from("whatsapp_inbound_events").insert({ message_id: input.external_message_id });
-      if (claim.error) {
-        if (claim.error.code === "23505") return json({ handled: true, duplicate: true });
-        throw claim.error;
-      }
-    }
-    const roleResult = await call(url, key, "role-router", input);
-    if (roleResult?.handled) {
-      if (roleResult.delegate) {
-        const delegated = await call(url, key, roleResult.delegate, { ...input, message: roleResult.delegate_message ?? input.message });
-        return json({ ...delegated, handled: true });
-      }
-      return json(roleResult);
-    }
-    const sessionResult = await supabase.from("conversation_sessions").select("id,state,context").eq("channel", channel).eq("external_user_id", phone).maybeSingle();
-    if (sessionResult.error) throw sessionResult.error;
-    const session = sessionResult.data;
-    const state = String(session?.state ?? "");
-    const customerNavigation = ["MY_JOBS","CUSTOMER_JOBS","CUST_MORE","CUST_PROFILE","CUST_ADDRESSES","CUST_HELP"].includes(message) || message.startsWith("CJOB:") || message.startsWith("CSTALE:");
-    if (customerNavigation) {
-      if (session?.id && state !== "ready") {
-        const cleared = await supabase.from("conversation_sessions").update({ flow: "ready", state: "ready", context: {}, status: "active", updated_at: new Date().toISOString() }).eq("id", session.id);
-        if (cleared.error) throw cleared.error;
-      }
-      const customerHome = await call(url, key, "customer-home-router", input);
-      if (customerHome?.handled) return json(customerHome);
-    }
-    if (message === "REQUEST_HELP" || message === "NEW_REQUEST") {
-      if (session?.id && state !== "ready") {
-        const cleared = await supabase.from("conversation_sessions").update({ flow: "ready", state: "ready", context: {}, status: "active", updated_at: new Date().toISOString() }).eq("id", session.id);
-        if (cleared.error) throw cleared.error;
-      }
-      return json(await call(url, key, "duplicate-job-router", { ...input, message: "REQUEST_HELP" }));
-    }
-    if (state.startsWith("duplicate_")) return json(await call(url, key, "duplicate-job-router", input));
-    if (["ji_description","ji_service_confirm","ji_urgency","ji_time","ji_photo_choice","ji_photo","ji_photo_confirm","ji_review","ji_edit","ji_post_photo","ji_consent","ji_customer_name"].includes(state)) {
-      return json(await call(url, key, "job-intake-router", input));
-    }
-    if (state === "ji_location") {
-      const location = parseLocation(message);
-      if (!location) return json({ handled: true, reply: "Tell me the suburb and city. You can type it naturally, for example ‘Claremont Cape Town’ or ‘Langa, Cape Town’." });
-      const context = { ...(session.context ?? {}), ...location };
-      if (context.editing === "location") {
-        const reviewed = { ...context, editing: null };
-        await updateSession(supabase, session.id, { state: "ji_review", context: reviewed });
-        return json(await call(url, key, "job-intake-router", { ...input, message: "JI_SHOW_REVIEW" }));
-      }
-      await updateSession(supabase, session.id, { state: "ji_urgency", context });
-      return json({ handled: true, reply: urgencyUi.body, ui: urgencyUi });
-    }
-    if (message === "H_JOBS" || message.startsWith("HJOBV:")) {
-      const handymanJobs = await call(url, key, "handyman-job-history-router", input);
-      if (handymanJobs?.handled) return json(handymanJobs);
-    }
-    const customerCommand = ["HOME","MY_JOBS","CUSTOMER_JOBS","CUST_MORE","CUST_PROFILE","CUST_ADDRESSES","CUST_HELP"].includes(message) || message.startsWith("CJOB:") || message.startsWith("CSTALE:") || message.startsWith("EDIT_JOB:") || message.startsWith("EDITLOC:") || message.startsWith("EDITSVC:") || message.startsWith("ESVCPAGE:") || message.startsWith("ESKILL:") || state === "customer_name" || state === "router_edit_location";
-    if (customerCommand) {
-      const customerHome = await call(url, key, "customer-home-router", input);
-      if (customerHome?.handled) return json(customerHome);
-    }
-    return json({ handled: false });
-  } catch (error) {
-    console.error(error);
-    return json({ error: "address_privacy_router_failed" }, 500);
-  }
-});
+type Incoming={channel?:string;external_user_id?:string;external_message_id?:string;message?:string};
+const json=(body:unknown,status=200)=>new Response(JSON.stringify(body),{status,headers:{"content-type":"application/json; charset=utf-8"}});
+function secretKey(){const raw=Deno.env.get("SUPABASE_SECRET_KEYS")??"";if(raw){try{const p=JSON.parse(raw);if(typeof p.default==="string")return p.default}catch{}}return Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")??""}
+function knownCity(value:string){const v=value.trim().replace(/\s+/g," "),n=v.toLowerCase().replace(/[^a-z]/g,"");const m:Record<string,[string,string]>= {capetown:["Cape Town","Western Cape"],johannesburg:["Johannesburg","Gauteng"],joburg:["Johannesburg","Gauteng"],jhb:["Johannesburg","Gauteng"],pretoria:["Pretoria","Gauteng"],tshwane:["Pretoria","Gauteng"],durban:["Durban","KwaZulu-Natal"],gqeberha:["Gqeberha","Eastern Cape"],portelizabeth:["Gqeberha","Eastern Cape"],eastlondon:["East London","Eastern Cape"],bloemfontein:["Bloemfontein","Free State"],polokwane:["Polokwane","Limpopo"],mbombela:["Mbombela","Mpumalanga"],nelspruit:["Mbombela","Mpumalanga"],kimberley:["Kimberley","Northern Cape"],george:["George","Western Cape"],stellenbosch:["Stellenbosch","Western Cape"],paarl:["Paarl","Western Cape"]};const hit=m[n];return hit?{city:hit[0],province:hit[1]}:{city:v,province:null as string|null}}
+function parseLocation(text:string){const raw=text.trim().replace(/\s+/g," ");const comma=raw.split(",").map(x=>x.trim()).filter(Boolean);if(comma.length>=2){const k=knownCity(comma[1]);return{suburb:comma[0],city:k.city,province:comma[2]??k.province}}const patterns:[RegExp,string,string][]= [[/\b(?:cape\s*town|capetown)\b/i,"Cape Town","Western Cape"],[/\b(?:johannesburg|joburg|jhb)\b/i,"Johannesburg","Gauteng"],[/\b(?:pretoria|tshwane)\b/i,"Pretoria","Gauteng"],[/\bdurban\b/i,"Durban","KwaZulu-Natal"],[/\b(?:gqeberha|port\s*elizabeth)\b/i,"Gqeberha","Eastern Cape"],[/\beast\s*london\b/i,"East London","Eastern Cape"],[/\bbloemfontein\b/i,"Bloemfontein","Free State"],[/\bpolokwane\b/i,"Polokwane","Limpopo"],[/\b(?:mbombela|nelspruit)\b/i,"Mbombela","Mpumalanga"],[/\bkimberley\b/i,"Kimberley","Northern Cape"],[/\bgeorge\b/i,"George","Western Cape"],[/\bstellenbosch\b/i,"Stellenbosch","Western Cape"],[/\bpaarl\b/i,"Paarl","Western Cape"]];for(const [re,city,province] of patterns){const m=re.exec(raw);if(!m||m.index<=0)continue;const suburb=raw.slice(0,m.index).replace(/[,-]+$/g,"").trim();if(suburb.length>=2)return{suburb,city,province}}return null}
+const urgencyUi={type:"buttons",body:"When do you need help?",buttons:[{id:"JI_URGENT",title:"As soon as possible"},{id:"JI_TODAY",title:"Today"},{id:"JI_FLEXIBLE",title:"I'm flexible"}]};
+async function call(url:string,key:string,target:string,input:Incoming){const r=await fetch(`${url}/functions/v1/${target}`,{method:"POST",headers:{apikey:key,"content-type":"application/json"},body:JSON.stringify(input)});if(!r.ok)return{handled:false};return await r.json()}
+async function updateSession(s:any,id:string,values:Record<string,unknown>){const r=await s.from("conversation_sessions").update(values).eq("id",id);if(r.error)throw r.error}
+function failContext(context:any){return{...(context??{}),location_failure_count:Number(context?.location_failure_count??0)+1}}
+function locationHelp(count:number,provider=false){if(count>=2)return provider?"I’m having trouble reading the area. You can type it naturally, for example: Claremont Cape Town, Bellville Cape Town, or Claremont, Cape Town.":"I’m having trouble reading the location. Type the suburb and city naturally, for example: Langa Cape Town or Langa, Cape Town.";return provider?"Please include your suburb and city. Example: Claremont Cape Town or Bellville, Cape Town.":"Please include the suburb and city. Example: Langa Cape Town or Langa, Cape Town."}
+Deno.serve(async request=>{if(request.method!=="POST")return json({error:"method_not_allowed"},405);const key=secretKey(),url=Deno.env.get("SUPABASE_URL")??"";if(!key||!url||request.headers.get("apikey")!==key)return json({error:"unauthorized"},401);let input:Incoming;try{input=await request.json()}catch{return json({error:"invalid_json"},400)}const phone=input.external_user_id?.trim(),message=input.message?.trim()??"",channel=input.channel??"whatsapp";if(!phone)return json({handled:false});const s=createClient(url,key,{auth:{persistSession:false,autoRefreshToken:false,detectSessionInUrl:false}});try{
+if(input.external_message_id){const claim=await s.from("whatsapp_inbound_events").insert({message_id:input.external_message_id});if(claim.error){if(claim.error.code==="23505")return json({handled:true,duplicate:true});throw claim.error}}
+const role=await call(url,key,"role-router",input);if(role?.handled){if(role.delegate){const d=await call(url,key,role.delegate,{...input,message:role.delegate_message??input.message});return json({...d,handled:true})}return json(role)}
+const stale=await call(url,key,"stale-action-router",input);if(stale?.handled)return json(stale);
+const sr=await s.from("conversation_sessions").select("id,state,context").eq("channel",channel).eq("external_user_id",phone).maybeSingle();if(sr.error)throw sr.error;const session=sr.data,state=String(session?.state??"");
+const customerNav=["MY_JOBS","CUSTOMER_JOBS","CUST_MORE","CUST_PROFILE","CUST_ADDRESSES","CUST_HELP"].includes(message)||message.startsWith("CJOB:")||message.startsWith("CSTALE:");if(customerNav){if(session?.id&&state!=="ready")await updateSession(s,session.id,{flow:"ready",state:"ready",context:{},status:"active",updated_at:new Date().toISOString()});const h=await call(url,key,"customer-home-router",input);if(h?.handled)return json(h)}
+if(message==="REQUEST_HELP"||message==="NEW_REQUEST"){if(session?.id&&state!=="ready")await updateSession(s,session.id,{flow:"ready",state:"ready",context:{},status:"active",updated_at:new Date().toISOString()});return json(await call(url,key,"duplicate-job-router",{...input,message:"REQUEST_HELP"}))}
+if(state.startsWith("duplicate_"))return json(await call(url,key,"duplicate-job-router",input));
+if(["ji_description","ji_service_confirm","ji_urgency","ji_time","ji_photo_choice","ji_photo","ji_photo_confirm","ji_review","ji_edit","ji_post_photo","ji_consent","ji_customer_name"].includes(state))return json(await call(url,key,"job-intake-router",input));
+if(state==="ji_location"){const loc=parseLocation(message);if(!loc){const c=failContext(session.context);await updateSession(s,session.id,{context:c});return json({handled:true,reply:locationHelp(c.location_failure_count)})}const context={...(session.context??{}),...loc,location_failure_count:0};if(context.editing==="location"){const reviewed={...context,editing:null};await updateSession(s,session.id,{state:"ji_review",context:reviewed});return json(await call(url,key,"job-intake-router",{...input,message:"JI_SHOW_REVIEW"}))}await updateSession(s,session.id,{state:"ji_urgency",context});return json({handled:true,reply:urgencyUi.body,ui:urgencyUi})}
+if(state==="handyman_router_add_area"){const loc=parseLocation(message);if(!loc){const c=failContext(session.context);await updateSession(s,session.id,{context:c});return json({handled:true,reply:locationHelp(c.location_failure_count,true)})}await updateSession(s,session.id,{state:"handyman_router_area_scope",context:{pending_area:loc,location_failure_count:0}});return json({handled:true,reply:`Area: ${loc.suburb}, ${loc.city}. How broadly do you work?`,ui:{type:"buttons",body:"Service coverage",buttons:[{id:"H_AREA_SCOPE:suburb",title:"This suburb"},{id:"H_AREA_SCOPE:city",title:"Whole city"},{id:"H_AREA_SCOPE:province",title:"Province"}]}})}
+if(state==="router_edit_location"){const loc=parseLocation(message);if(!loc){const c=failContext(session.context);await updateSession(s,session.id,{context:c});return json({handled:true,reply:locationHelp(c.location_failure_count)})}const customer=await s.from("customers").select("id").eq("phone",phone).maybeSingle();if(customer.error)throw customer.error;const jobId=String(session.context?.editing_job_id??"");if(!customer.data||!jobId)return json({handled:true,reply:"I couldn't find that request. Open My jobs and try again."});const job=await s.from("jobs").select("id,status").eq("id",jobId).eq("customer_id",customer.data.id).maybeSingle();if(job.error)throw job.error;if(!job.data)return json({handled:true,reply:"That request is no longer available. Open My jobs to continue."});const up=await s.from("jobs").update({...loc,status:["open","matching"].includes(job.data.status)?"matching":job.data.status}).eq("id",jobId);if(up.error)throw up.error;if(["open","matching"].includes(job.data.status)){const ex=await s.from("job_matches").update({status:"expired"}).eq("job_id",jobId).eq("status","offered");if(ex.error)throw ex.error}await updateSession(s,session.id,{flow:"ready",state:"ready",context:{}});return json(await call(url,key,"customer-job-router",{...input,message:`JOB_STATUS:${jobId}`}))}
+if(message==="H_JOBS"||message.startsWith("HJOBV:")){const h=await call(url,key,"handyman-job-history-router",input);if(h?.handled)return json(h)}
+const customerCommand=["HOME","MY_JOBS","CUSTOMER_JOBS","CUST_MORE","CUST_PROFILE","CUST_ADDRESSES","CUST_HELP"].includes(message)||message.startsWith("CJOB:")||message.startsWith("CSTALE:")||message.startsWith("EDIT_JOB:")||message.startsWith("EDITLOC:")||message.startsWith("EDITSVC:")||message.startsWith("ESVCPAGE:")||message.startsWith("ESKILL:")||state==="customer_name";if(customerCommand){const h=await call(url,key,"customer-home-router",input);if(h?.handled)return json(h)}return json({handled:false})
+}catch(error){console.error(error);return json({error:"address_privacy_router_failed"},500)}});

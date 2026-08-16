@@ -1,7 +1,9 @@
 alter table public.handymen
   add column if not exists bio text,
   add column if not exists years_experience integer,
-  add column if not exists profile_completed_at timestamptz;
+  add column if not exists profile_completed_at timestamptz,
+  add column if not exists reliability_score integer default 100,
+  add column if not exists reliability_flag text default 'good';
 
 alter table public.handymen drop constraint if exists handymen_years_experience_check;
 alter table public.handymen add constraint handymen_years_experience_check check(years_experience is null or years_experience between 0 and 60);

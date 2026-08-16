@@ -20,6 +20,36 @@ where s.id = j.skill_id
   and s.name <> 'General Handyman'
   and j.service_confirmed_at is null;
 
+-- Canonical database boundary: no job may become matchable until its service
+-- has been explicitly confirmed and the confirmed skill matches the job skill.
+create or replace function public.enforce_confirmed_service_before_matching()
+returns trigger
+language plpgsql
+set search_path = pg_catalog, public
+as $$
+begin
+  if new.status in ('open', 'matching') then
+    if new.service_confirmed_at is null
+       or new.confirmed_skill_id is null
+       or new.confirmed_skill_id <> new.skill_id then
+      raise exception 'service_not_confirmed_for_matching'
+        using errcode = '23514';
+    end if;
+  end if;
+  return new;
+end;
+$$;
+
+drop trigger if exists trg_enforce_confirmed_service_before_matching on public.jobs;
+create trigger trg_enforce_confirmed_service_before_matching
+before insert or update of status, skill_id, confirmed_skill_id, service_confirmed_at
+on public.jobs
+for each row
+execute function public.enforce_confirmed_service_before_matching();
+
+revoke all on function public.enforce_confirmed_service_before_matching()
+  from public, anon, authenticated;
+
 -- The matching worker is a second publication boundary. It must never offer
 -- or remind on a job whose service was not explicitly confirmed.
 do $migration$

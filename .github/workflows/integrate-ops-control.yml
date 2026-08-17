@@ -1,0 +1,68 @@
+name: Integrate Ops Control
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - '.github/workflows/integrate-ops-control.yml'
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+concurrency:
+  group: pages
+  cancel-in-progress: false
+jobs:
+  patch-and-deploy:
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Patch canonical Ops UI
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          p=Path('site/admin/index.html')
+          s=p.read_text()
+          old='<a class="linkbtn" href="https://tjhuwtclvlxouwvktzem.supabase.co/functions/v1/ops-dispatch">Dispatch</a><a class="linkbtn" href="https://tjhuwtclvlxouwvktzem.supabase.co/functions/v1/ops-supply">Supply</a><a class="linkbtn" href="https://tjhuwtclvlxouwvktzem.supabase.co/functions/v1/ops-recovery">Recovery</a>'
+          new='<button class="linkbtn" type="button" onclick="openOps(\'dispatch\')">Dispatch</button><button class="linkbtn" type="button" onclick="openOps(\'supply\')">Supply</button><button class="linkbtn" type="button" onclick="openOps(\'recovery\')">Recovery</button>'
+          if old in s: s=s.replace(old,new,1)
+          marker='<button class="tab" data-p="stalled">Stalled Users</button>'
+          tabs=marker+'<button class="tab" data-p="dispatch" onclick="loadOps()">Dispatch</button><button class="tab" data-p="supply" onclick="loadOps()">Supply</button><button class="tab" data-p="recovery" onclick="loadOps()">Recovery</button>'
+          if 'data-p="dispatch"' not in s: s=s.replace(marker,tabs,1)
+          sec='<section id="stalled" class="panel"></section>'
+          add=sec+'<section id="dispatch" class="panel"></section><section id="supply" class="panel"></section><section id="recovery" class="panel"></section>'
+          if 'id="dispatch" class="panel"' not in s: s=s.replace(sec,add,1)
+          api='const API="https://tjhuwtclvlxouwvktzem.supabase.co/functions/v1/admin-api",GROWTH="https://tjhuwtclvlxouwvktzem.supabase.co/functions/v1/ops-growth-api";'
+          api2='const API="https://tjhuwtclvlxouwvktzem.supabase.co/functions/v1/admin-api",GROWTH="https://tjhuwtclvlxouwvktzem.supabase.co/functions/v1/ops-growth-api",OPS="https://tjhuwtclvlxouwvktzem.supabase.co/functions/v1/ops-control-api";'
+          s=s.replace(api,api2,1)
+          callmark='const api=body=>call(API,body),growth=body=>call(GROWTH,body);'
+          s=s.replace(callmark,'const api=body=>call(API,body),growth=body=>call(GROWTH,body),ops=body=>call(OPS,body);',1)
+          if 'function openOps(which)' not in s:
+            inject=r'''
+function openOps(which){document.querySelectorAll('.tab,.panel').forEach(x=>x.classList.remove('active'));const b=document.querySelector('.tab[data-p="'+which+'"]');if(b)b.classList.add('active');const p=document.getElementById(which);if(p)p.classList.add('active');loadOps()}
+async function opsAction(action,id,msg){if(msg&&!confirm(msg))return;try{const r=await ops({action,id});alert(r.message||'Updated');await loadOps()}catch(e){alert(e.message)}}
+async function loadOps(){try{const o=await ops({action:'summary'});const d=o.dispatch||{},sp=o.supply||{},rc=o.recovery||{};
+ document.getElementById('dispatch').innerHTML='<div class="stats">'+stat('Jobs',d.total)+stat('Open / matching',d.searching)+stat('Alerts',d.alerts,d.alerts?'alert':'')+stat('Assigned / active',d.active)+stat('Completed',d.completed)+'</div>'+box('Dispatch control',['Job','Customer','Service / Area','Status','Dispatch','Ready providers','Matches / offers','Notifications','Alert'],(d.rows||[]).map(q=>'<tr><td><strong>'+E(q.description)+'</strong></td><td>'+E(q.customer_name||'—')+'<div class="muted">'+E(q.customer_phone||'')+'</div></td><td>'+E(q.skill_name||'—')+'<div class="muted">'+E([q.suburb,q.city].filter(Boolean).join(', '))+'</div></td><td>'+P(q.status)+'</td><td>'+E(q.dispatch_state)+'</td><td><strong>'+E(q.skill_ready_candidates)+'</strong></td><td>'+E(q.match_count)+' / '+E(q.open_offers)+'</td><td>'+E(q.notifications_sent)+' sent / '+E(q.notifications_failed)+' failed</td><td>'+(q.alert?P(q.alert):'<span class="pill active">clear</span>')+'</td></tr>'));
+ document.getElementById('supply').innerHTML='<div class="stats">'+stat('Providers',sp.total)+stat('Dispatchable',sp.ready)+stat('Target',sp.target||10)+stat('Gap',Math.max(0,(sp.target||10)-(sp.ready||0)),sp.ready?'':'alert')+'</div>'+box('Provider readiness',['Provider','Skills','Areas','Verification','Availability','Blocker','Action'],(sp.rows||[]).map(q=>'<tr><td><strong>'+E(q.full_name)+'</strong><div class="muted">'+E(q.phone)+'</div></td><td>'+E((q.skills||[]).join(', '))+'</td><td>'+E((q.areas||[]).join('; '))+'</td><td>'+P(q.verification_status)+'</td><td>'+P(q.availability_status)+'</td><td>'+P(q.readiness_status)+'</td><td>'+(q.dispatchable?'<span class="pill active">Ready</span>':'<button onclick="opsAction(\'supply_nudge\',\''+q.handyman_id+'\',\'Send readiness WhatsApp nudge?\')">Nudge</button>')+'</td></tr>'));
+ const st=rc.stats||{};document.getElementById('recovery').innerHTML='<div class="stats">'+stat('Open stalls',st.open)+stat('Nudged',st.nudged)+stat('Resumed',st.resumed)+stat('Recovery rate',(st.rate||0)+'%')+stat('Manual review',st.manual_review,st.manual_review?'alert':'')+'</div>'+box('Current stalls',['User','Flow','State','Age','Nudges','Delivery','Reviewed','Actions'],(rc.open||[]).map(q=>'<tr><td><strong>'+E(q.external_user_id)+'</strong></td><td>'+E(q.flow)+'</td><td>'+E(q.state)+'</td><td>'+AGE(q.stalled_since)+'</td><td>'+E(q.reminder_count)+'</td><td>'+P(q.delivery_status||'not nudged')+'</td><td>'+E(D(q.reviewed_at))+'</td><td><div class="actions"><button class="good" onclick="opsAction(\'recovery_nudge\',\''+q.session_id+'\',\'Send one recovery WhatsApp?\')">Nudge</button><button onclick="opsAction(\'recovery_review\',\''+q.session_id+'\')">Reviewed</button><button class="danger" onclick="opsAction(\'recovery_dismiss\',\''+q.session_id+'\',\'Dismiss this stall?\')">Dismiss</button></div></td></tr>'));
+ }catch(e){const el=document.getElementById('error');el.textContent='Ops controls: '+e.message;el.style.display='block'}}
+'''
+            s=s.replace('function stat(label,value,cls="")',inject+'\nfunction stat(label,value,cls="")',1)
+          p.write_text(s)
+          PY
+      - name: Commit canonical UI
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add site/admin/index.html
+          git diff --cached --quiet || git commit -m "Integrate Dispatch Supply Recovery into Ops Control Tower"
+          git push
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+      - name: Deploy immediately
+        id: deployment
+        uses: actions/deploy-pages@v4

@@ -1,0 +1,31 @@
+name: Patch Static Ops Navigation
+on:
+  push:
+    paths:
+      - '.github/workflows/add-static-ops-navigation.yml'
+permissions:
+  contents: write
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Add Dispatch Supply Recovery to GitHub Pages Ops
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path('site/admin/index.html')
+          s=p.read_text()
+          old='<div class="topactions"><a class="linkbtn" href="control-center/">Control centre</a><a class="linkbtn" href="notifications/">Notification health</a><button id="signout">Sign out</button></div>'
+          new='<div class="topactions"><a class="linkbtn" href="https://tjhuwtclvlxouwvktzem.supabase.co/functions/v1/ops-dispatch">Dispatch</a><a class="linkbtn" href="https://tjhuwtclvlxouwvktzem.supabase.co/functions/v1/ops-supply">Supply</a><a class="linkbtn" href="https://tjhuwtclvlxouwvktzem.supabase.co/functions/v1/ops-recovery">Recovery</a><a class="linkbtn" href="control-center/">Control centre</a><a class="linkbtn" href="notifications/">Notification health</a><button id="signout">Sign out</button></div>'
+          if old not in s:
+              raise SystemExit('Expected static Ops navigation not found')
+          p.write_text(s.replace(old,new,1))
+          PY
+      - name: Commit patch
+        run: |
+          git config user.name "robertmatiwa1"
+          git config user.email "67677198+robertmatiwa1@users.noreply.github.com"
+          git add site/admin/index.html
+          git commit -m "Add Dispatch Supply and Recovery to GitHub Pages Ops"
+          git push

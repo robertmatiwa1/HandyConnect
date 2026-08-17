@@ -1,0 +1,33 @@
+name: Fix Job Location State
+on:
+  push:
+    paths:
+      - '.github/workflows/fix-job-location-state.yml'
+permissions:
+  contents: write
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Patch ji_location handler
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          p=Path('supabase/functions/job-intake-router/index.ts')
+          s=p.read_text()
+          marker='''    if (session.state === "ji_urgency") {'''
+          handler='''    if (session.state === "ji_location") {\n      const parts = message.split(",").map((part) => part.trim()).filter(Boolean);\n      if (parts.length < 2) {\n        return json({\n          handled: true,\n          reply: "Please send suburb and city separated by a comma. Example: Langa, Cape Town",\n        });\n      }\n      const [suburb, city, ...provinceParts] = parts;\n      context = {\n        ...context,\n        suburb,\n        city,\n        province: provinceParts.join(", ") || context.province || null,\n      };\n      if (context.editing === "location") {\n        context = { ...context, editing: null };\n        await updateSession(supabase, session.id, {\n          state: "ji_review",\n          context,\n        });\n        const ui = reviewUi(context);\n        return json({ handled: true, reply: ui.body, ui });\n      }\n      await updateSession(supabase, session.id, {\n        state: "ji_urgency",\n        context,\n      });\n      return json({ handled: true, reply: urgencyUi.body, ui: urgencyUi });\n    }\n\n'''
+          if 'session.state === "ji_location"' in s:
+              raise SystemExit('ji_location handler already present')
+          if marker not in s:
+              raise SystemExit('marker not found')
+          p.write_text(s.replace(marker, handler+marker, 1))
+          PY
+      - name: Commit fix
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add supabase/functions/job-intake-router/index.ts
+          git commit -m 'Fix job intake location state transition'
+          git push

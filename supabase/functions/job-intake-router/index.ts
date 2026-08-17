@@ -755,6 +755,37 @@ Deno.serve(async (request) => {
       });
     }
 
+    if (session.state === "ji_location") {
+      const parts = message.split(",").map((part) => part.trim()).filter(Boolean);
+      if (parts.length < 2) {
+        return json({
+          handled: true,
+          reply: "Please send suburb and city separated by a comma. Example: Langa, Cape Town",
+        });
+      }
+      const [suburb, city, ...provinceParts] = parts;
+      context = {
+        ...context,
+        suburb,
+        city,
+        province: provinceParts.join(", ") || context.province || null,
+      };
+      if (context.editing === "location") {
+        context = { ...context, editing: null };
+        await updateSession(supabase, session.id, {
+          state: "ji_review",
+          context,
+        });
+        const ui = reviewUi(context);
+        return json({ handled: true, reply: ui.body, ui });
+      }
+      await updateSession(supabase, session.id, {
+        state: "ji_urgency",
+        context,
+      });
+      return json({ handled: true, reply: urgencyUi.body, ui: urgencyUi });
+    }
+
     if (session.state === "ji_urgency") {
       const timing: Record<
         string,

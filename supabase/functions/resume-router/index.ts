@@ -13,22 +13,24 @@ Deno.serve(async req=>{if(req.method!=="POST")return json({handled:false},405);c
  s.from("customers").select("id,full_name,registration_status,terms_accepted_at").eq("phone",phone).maybeSingle()
 ]);for(const r of [session,provider,customer])if(r.error)throw r.error;const st=String(session.data?.state??"");const flow=String(session.data?.flow??"");
  if(provider.data?.status==="suspended")return json({handled:true,reply:"This account is restricted. Contact HandyConnect support for review."});
- // Compatibility for legacy customer drafts. Preserve the old state/context so
- // the existing legacy conversation engine can consume the next real answer.
  if(st==="capture_job_location"||st==="capture_location"&&flow==="customer_job")return json({handled:true,reply:"Welcome back. Your request details are still saved. Send the suburb and city for the job, for example: Langa Cape Town or Langa, Cape Town.",resumed_state:st});
  if(st==="capture_job_description")return json({handled:true,reply:"Welcome back. Your request is still in progress. Tell me what needs fixing in one sentence.",resumed_state:st});
  if(st==="capture_job_urgency"||st==="capture_job_timing")return json({handled:true,reply:"Welcome back. Your request is still saved. Tell me when you need the handyman: as soon as possible, today, or flexible.",resumed_state:st});
- // Exact unfinished conversational state wins over generic account state.
  if(st&&st!=="ready"){
    if(st.startsWith("handyman_router_")||["quote_capture","handyman_cancel_other_reason","profile_edit_bio","profile_edit_exp","profile_edit_business"].includes(st)){const r=await call(url,k,"handyman-router",input, st==="handyman_router_verification_document"?"H_SUBMIT_ID":"HANDYMAN_HOME");return json({...r.body,handled:true,resumed_state:st},r.status)}
-   if(flow==="handyman_onboarding"||["capture_name","capture_business_name","capture_skill","capture_location","handyman_terms"].includes(st)){return json({handled:true,reply:"Welcome back. Your provider setup is still saved. Reply continue to carry on from this step.",resumed_state:st})}
+   if(flow==="handyman_onboarding"||["capture_name","capture_business","capture_business_name","capture_skills","capture_skill","capture_location","confirm_terms","handyman_terms"].includes(st)){
+     if(["confirm_terms","handyman_terms"].includes(st)){const r=await call(url,k,"conversation-engine",input,"ROLE_HANDYMAN");return json({...r.body,handled:true,resumed_state:st},r.status)}
+     if(["capture_skills","capture_skill"].includes(st)){const r=await call(url,k,"conversation-engine",input,"HCATPAGE:0");return json({...r.body,handled:true,resumed_state:st},r.status)}
+     if(st==="capture_name")return json({handled:true,reply:"Welcome back. Your provider setup is saved. Send your full name to continue.",resumed_state:st});
+     if(["capture_business","capture_business_name"].includes(st))return json({handled:true,reply:"Welcome back. Your provider setup is saved. Send your business name, or reply SKIP if you do not use one.",resumed_state:st});
+     if(st==="capture_location")return json({handled:true,reply:"Welcome back. Your provider setup is saved. Send the suburb and city where you mainly work, for example: Bellville, Cape Town.",resumed_state:st});
+     return json({handled:true,reply:"Welcome back. Your provider setup is saved. Please reply with the information requested on your current step.",resumed_state:st});
+   }
    if(st.startsWith("ji_")||st==="customer_name"){const prompt:Record<string,string>={ji_description:"Tell me what you need help with.",ji_location:"Send the suburb and city for the job.",ji_urgency:"When do you need help?",ji_customer_name:"Send your full name to continue.",customer_name:"Send your full name to continue."};return json({handled:true,reply:`Welcome back. I still have your request in progress. ${prompt[st]??"Continue from where you left off."}`,ui:buttons("Continue your request",[{id:"REQUEST_HELP",title:"Resume request"},{id:"CUSTOMER_JOBS",title:"My jobs"},{id:"HOME",title:"Home"}]),resumed_state:st})}
    if(st==="router_edit_location")return json({handled:true,reply:"Welcome back. Send the updated suburb and city for this request.",ui:buttons("Edit request",[{id:"CUSTOMER_JOBS",title:"My jobs"},{id:"HOME",title:"Home"}]),resumed_state:st});
    if(st.startsWith("report_router_")){const r=await call(url,k,"report-router",input,"report");return json({...r.body,handled:true,resumed_state:st},r.status)}
  }
- // Registered provider onboarding is not complete until verification is complete.
  if(provider.data){if(provider.data.verification_status!=="verified"){const r=await call(url,k,"handyman-router",input,"H_VERIFY");return json({...r.body,handled:true,resumed_state:"verification"},r.status)}if(provider.data.active_job_id){const r=await call(url,k,"marketplace-router",input,"H_CURRENT");return json({...r.body,handled:true,resumed_state:"current_job"},r.status)}const r=await call(url,k,"handyman-router",input,"HANDYMAN_HOME");return json({...r.body,handled:true,resumed_state:"provider_home"},r.status)}
- // Customer with a live request should see jobs before generic home.
  if(customer.data){const jobs=await s.from("jobs").select("id,status").eq("customer_id",customer.data.id).in("status",["open","matching","assigned","in_progress"]).order("created_at",{ascending:false}).limit(1);if(jobs.error)throw jobs.error;if(jobs.data?.length){const r=await call(url,k,"marketplace-router",input,"CUSTOMER_JOBS");return json({...r.body,handled:true,resumed_state:"customer_jobs"},r.status)}const r=await call(url,k,"customer-home-router",input,"HOME");return json({...r.body,handled:true,resumed_state:"customer_home"},r.status)}
  return json({handled:false});
 }catch(e){console.error(e);return json({handled:false,error:"resume_failed"},500)}});

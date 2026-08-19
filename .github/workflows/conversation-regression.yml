@@ -4,6 +4,7 @@ on:
   push:
     branches: [main]
     paths:
+      - 'supabase/config.toml'
       - 'supabase/functions/**'
       - 'supabase/migrations/**'
       - 'tests/conversation-transcripts/**'
@@ -11,6 +12,7 @@ on:
       - '.github/workflows/conversation-regression.yml'
   pull_request:
     paths:
+      - 'supabase/config.toml'
       - 'supabase/functions/**'
       - 'supabase/migrations/**'
       - 'tests/conversation-transcripts/**'

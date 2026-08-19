@@ -1,4 +1,5 @@
 import { createClient } from "@supabase/supabase-js";
+
 type Incoming = {
   channel?: "whatsapp" | "test" | "admin";
   external_user_id?: string;
@@ -6,961 +7,147 @@ type Incoming = {
   message?: string;
   media?: { id: string; type: string; mime_type?: string; filename?: string };
 };
-type Ui =
-  | {
-      type: "buttons";
-      body: string;
-      buttons: { id: string; title: string }[];
-    }
-  | {
-      type: "list";
-      body: string;
-      button: string;
-      rows: { id: string; title: string; description?: string }[];
-    };
+
 const json = (body: unknown, status = 200) =>
   new Response(JSON.stringify(body), {
     status,
     headers: { "content-type": "application/json; charset=utf-8" },
   });
+
 function key() {
-  const raw = Deno.env.get("SUPABASE_SECRET_KEYS");
+  const raw = Deno.env.get("SUPABASE_SECRET_KEYS") ?? "";
   if (raw) {
     try {
-      const p = JSON.parse(raw);
-      if (typeof p.default === "string" && p.default) return p.default;
+      const parsed = JSON.parse(raw);
+      if (typeof parsed.default === "string") return parsed.default;
     } catch {}
   }
   return Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
 }
-const norm = (s: string) => s.trim().toLowerCase();
-function parseLocation(text: string) {
-  const p = text
-    .split(",")
-    .map((x) => x.trim())
-    .filter(Boolean);
-  return p.length < 2
-    ? null
-    : { suburb: p[0], city: p[1], province: p[2] ?? null };
-}
-function validEmail(text: string) {
-  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(text.trim());
-}
-function safeFileName(value: string) {
-  return (
-    value.replace(/[^a-zA-Z0-9._-]/g, "_").slice(-90) || "identity-document"
-  );
-}
-function hex(buffer: ArrayBuffer) {
-  return [...new Uint8Array(buffer)]
-    .map((byte) => byte.toString(16).padStart(2, "0"))
-    .join("");
-}
-async function fetchVerificationMedia(media: NonNullable<Incoming["media"]>) {
-  const token = Deno.env.get("WHATSAPP_ACCESS_TOKEN") ?? "";
-  const version = Deno.env.get("WHATSAPP_GRAPH_VERSION") ?? "v26.0";
-  if (!token) throw new Error("whatsapp_media_unavailable");
 
-  const metadataResponse = await fetch(
-    `https://graph.facebook.com/${version}/${media.id}`,
-    { headers: { authorization: `Bearer ${token}` } },
-  );
-  if (!metadataResponse.ok) {
-    throw new Error(`verification_media_metadata_${metadataResponse.status}`);
-  }
-  const metadata = await metadataResponse.json();
-  const fileResponse = await fetch(metadata.url, {
-    headers: { authorization: `Bearer ${token}` },
-  });
-  if (!fileResponse.ok) {
-    throw new Error(`verification_media_download_${fileResponse.status}`);
-  }
-
-  const buffer = await fileResponse.arrayBuffer();
-  const mime = (
-    fileResponse.headers.get("content-type") ||
-    media.mime_type ||
-    ""
-  )
-    .split(";")[0]
-    .toLowerCase();
-  if (buffer.byteLength === 0 || buffer.byteLength > 8 * 1024 * 1024) {
-    throw new Error("verification_document_size_invalid");
-  }
-  if (!["image/jpeg", "image/png", "application/pdf"].includes(mime)) {
-    throw new Error("unsupported_verification_document");
-  }
-  return { buffer, mime };
-}
-async function archiveVerificationDocument(
-  s: any,
-  handymanId: string,
-  media: NonNullable<Incoming["media"]>,
-) {
-  const file = await fetchVerificationMedia(media);
-  const extension =
-    file.mime === "application/pdf"
-      ? "pdf"
-      : file.mime === "image/png"
-        ? "png"
-        : "jpg";
-  const path = `${handymanId}/${crypto.randomUUID()}-${safeFileName(
-    media.filename || `identity-document.${extension}`,
-  )}`;
-  const upload = await s.storage
-    .from("provider-verification")
-    .upload(path, file.buffer, { contentType: file.mime, upsert: false });
-  if (upload.error) throw upload.error;
-  return {
-    path,
-    mime: file.mime,
-    byteSize: file.buffer.byteLength,
-    sha256: hex(await crypto.subtle.digest("SHA-256", file.buffer)),
-  };
-}
-async function delegate(
-  url: string,
-  k: string,
-  input: Incoming,
-  override?: string,
-) {
-  const r = await fetch(`${url}/functions/v1/conversation-engine`, {
-    method: "POST",
-    headers: { apikey: k, "content-type": "application/json" },
-    body: JSON.stringify({ ...input, message: override ?? input.message }),
-  });
-  return {
-    status: r.status,
-    body: await r.json().catch(() => ({ error: "invalid_engine_response" })),
-  };
-}
-async function startProCheckout(url: string, k: string, phone: string) {
-  const r = await fetch(`${url}/functions/v1/paystack-checkout`, {
-    method: "POST",
-    headers: { apikey: k, "content-type": "application/json" },
-    body: JSON.stringify({ phone }),
-  });
-  return {
-    status: r.status,
-    body: await r.json().catch(() => ({ error: "invalid_checkout_response" })),
-  };
-}
-function dashboardUi(): Ui {
+function availabilityUi() {
   return {
     type: "list",
-    body: "Handyman dashboard",
-    button: "Open",
-    rows: [
-      {
-        id: "H_CURRENT",
-        title: "Current job",
-        description: "Accepted work in progress",
-      },
-      {
-        id: "H_NEW",
-        title: "New jobs",
-        description: "Browse matching opportunities",
-      },
-      {
-        id: "H_HISTORY",
-        title: "Job history",
-        description: "Completed and cancelled work",
-      },
-      {
-        id: "H_AVAIL",
-        title: "Availability",
-        description: "Available or offline",
-      },
-      {
-        id: "H_PROFILE",
-        title: "Profile",
-        description: "Skills, areas and verification",
-      },
-    ],
-  };
-}
-function profileUi(): Ui {
-  return {
-    type: "list",
-    body: "Provider profile",
-    button: "Manage profile",
-    rows: [
-      {
-        id: "H_VERIFY",
-        title: "Verification",
-        description: "Identity and approval status",
-      },
-      {
-        id: "H_SKILLS",
-        title: "Skills",
-        description: "Services you can perform",
-      },
-      {
-        id: "H_AREAS",
-        title: "Service areas",
-        description: "Where you accept work",
-      },
-      {
-        id: "H_PLAN",
-        title: "Plan",
-        description: "Opportunities and Pro access",
-      },
-      {
-        id: "HANDYMAN_HOME",
-        title: "Dashboard",
-        description: "Back to provider dashboard",
-      },
-    ],
-  };
-}
-function availabilityUi(): Ui {
-  return {
-    type: "list",
-    body: "How long are you available for new jobs?",
+    body: "Verification approved. How long are you available for new jobs?",
     button: "Set availability",
     rows: [
       { id: "H_AVAIL:2", title: "Available 2 hours" },
       { id: "H_AVAIL:4", title: "Available 4 hours" },
       { id: "H_AVAIL:8", title: "Available 8 hours" },
       { id: "H_AVAIL:12", title: "Available today" },
-      { id: "H_OFFLINE", title: "Go offline" },
+      { id: "H_OFFLINE", title: "Stay offline" },
     ],
   };
 }
-const categoryPages = [
-  [
-    "appliance_repair",
-    "plumbing",
-    "electrical",
-    "general_handyman",
-    "carpentry",
-    "painting",
-    "locksmith",
-    "tiling",
-    "aircon_hvac",
-  ],
-  [
-    "solar_inverter",
-    "cctv_security",
-    "gates_garage_doors",
-    "roofing",
-    "waterproofing",
-    "ceilings_drywall",
-    "flooring",
-    "glazing_windows",
-    "welding_metalwork",
-  ],
-  [
-    "gardening_landscaping",
-    "pool_maintenance",
-    "paving",
-    "gutters",
-    "pest_control",
-    "furniture_assembly",
-    "moving_small_jobs",
-  ],
-];
-async function skillMenu(s: any, page = 0): Promise<Ui> {
-  const { data } = await s
-    .from("skills")
-    .select("code,name")
-    .eq("active", true);
-  const map = new Map((data ?? []).map((z: any) => [z.code, z]));
-  const rows = (categoryPages[page] ?? categoryPages[0])
-    .map((c) => map.get(c))
-    .filter(Boolean)
-    .map((z: any) => ({
-      id: `H_ADD_SKILL:${z.code}`,
-      title: z.name,
-    }));
-  if (page < 2) {
-    rows.push({ id: `H_SKILL_PAGE:${page + 1}`, title: "More services" });
-  }
-  if (page > 0) {
-    rows.push({ id: `H_SKILL_PAGE:${page - 1}`, title: "Previous services" });
-  }
-  return {
-    type: "list",
-    body: "Add a service you can genuinely perform.",
-    button: "Choose service",
-    rows: rows.slice(0, 10),
-  };
-}
+
 Deno.serve(async (req) => {
   if (req.method !== "POST") return json({ error: "method_not_allowed" }, 405);
-  const k = key();
-  if (!k || req.headers.get("apikey") !== k) {
+
+  const secret = key();
+  const url = Deno.env.get("SUPABASE_URL") ?? "";
+  if (!secret || !url || req.headers.get("apikey") !== secret) {
     return json({ error: "unauthorized" }, 401);
   }
-  const s = createClient(Deno.env.get("SUPABASE_URL") ?? "", k, {
-    auth: {
-      persistSession: false,
-      autoRefreshToken: false,
-      detectSessionInUrl: false,
-    },
-  });
+
   let input: Incoming;
   try {
     input = await req.json();
   } catch {
     return json({ error: "invalid_json" }, 400);
   }
-  const phone = input.external_user_id?.trim(),
-    message = input.message?.trim();
-  if (!phone || !message) return json({ error: "missing_input" }, 400);
-  const url = Deno.env.get("SUPABASE_URL") ?? "";
+
+  const phone = input.external_user_id?.trim() ?? "";
+  const s = createClient(url, secret, {
+    auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false },
+  });
+
+  let verificationSubmission = false;
+  let handymanId: string | null = null;
+
+  if (phone && input.media?.id) {
+    const [session, handyman] = await Promise.all([
+      s.from("conversation_sessions")
+        .select("state")
+        .eq("channel", input.channel ?? "whatsapp")
+        .eq("external_user_id", phone)
+        .maybeSingle(),
+      s.from("handymen")
+        .select("id,verification_status")
+        .eq("phone", phone)
+        .maybeSingle(),
+    ]);
+
+    if (!session.error && !handyman.error && handyman.data?.id) {
+      handymanId = handyman.data.id;
+      verificationSubmission =
+        session.data?.state === "handyman_router_verification_document" &&
+        handyman.data.verification_status !== "verified";
+    }
+  }
+
+  const upstream = await fetch(`${url}/functions/v1/handyman-router-legacy`, {
+    method: "POST",
+    headers: { apikey: secret, "content-type": "application/json" },
+    body: JSON.stringify(input),
+  });
+  const text = await upstream.text();
+
+  if (!upstream.ok || !verificationSubmission || !handymanId || !input.media?.id) {
+    return new Response(text, {
+      status: upstream.status,
+      headers: { "content-type": "application/json; charset=utf-8" },
+    });
+  }
+
   try {
-    const hq = await s
-      .from("handymen")
-      .select(
-        "id,full_name,business_name,email,verification_status,average_rating,completed_jobs,availability_status,available_until,active_job_id,availability_cooldown_until",
-      )
-      .eq("phone", phone)
+    const doc = await s.from("handyman_verification_documents")
+      .select("id,status,storage_path,sha256,byte_size,mime_type")
+      .eq("handyman_id", handymanId)
+      .eq("media_id", input.media.id)
+      .order("submitted_at", { ascending: false })
+      .limit(1)
       .maybeSingle();
-    if (hq.error) throw hq.error;
-    let h = hq.data;
-    if (!h) {
-      const d = await delegate(url, k, input);
-      return json(d.body, d.status);
-    }
-    const session = await s
-      .from("conversation_sessions")
-      .select("id,state,context")
-      .eq("channel", input.channel ?? "whatsapp")
-      .eq("external_user_id", phone)
-      .maybeSingle();
-    if (session.data?.state === "handyman_router_verification_document") {
-      if (!input.media?.id) {
-        return json({
-          ok: true,
-          reply:
-            "Please attach a clear photo or document of your South African ID, passport or valid permit. Do not type the number into chat.",
-        });
-      }
-      let archived;
-      try {
-        archived = await archiveVerificationDocument(s, h.id, input.media);
-      } catch (error) {
-        const reason = String(error);
-        if (reason.includes("unsupported_verification_document")) {
-          return json({
-            ok: true,
-            reply: "Please send your document as a JPG, PNG or PDF file.",
-          });
-        }
-        if (reason.includes("verification_document_size_invalid")) {
-          return json({
-            ok: true,
-            reply:
-              "That document is empty or larger than 8 MB. Please send a smaller JPG, PNG or PDF file.",
-          });
-        }
-        throw error;
-      }
-      const q = await s.from("handyman_verification_documents").insert({
-        handyman_id: h.id,
-        document_type: "identity",
-        media_id: input.media.id,
-        file_name: input.media.filename ?? null,
-        mime_type: archived.mime,
-        storage_path: archived.path,
-        sha256: archived.sha256,
-        byte_size: archived.byteSize,
-        archived_at: new Date().toISOString(),
-      });
-      if (q.error) {
-        await s.storage.from("provider-verification").remove([archived.path]);
-        if (q.error.code !== "23505") throw q.error;
-      }
-      await s
-        .from("handymen")
-        .update({
-          verification_status: "pending",
-          updated_at: new Date().toISOString(),
-        })
-        .eq("id", h.id);
-      await s
-        .from("conversation_sessions")
-        .update({
-          state: "ready",
-          context: {},
-        })
-        .eq("id", session.data.id);
-      return json({
-        ok: true,
-        reply:
-          "Document received securely. Your verification is now pending review. You can use the dashboard while we review it, but job opportunities only unlock after verification.",
-        ui: dashboardUi(),
-      });
-    }
-    if (session.data?.state === "handyman_router_billing_email") {
-      if (!validEmail(message)) {
-        return json({
-          ok: true,
-          reply:
-            "Please send a valid email address for payment receipts. Example: name@example.com",
-        });
-      }
-      await s
-        .from("handymen")
-        .update({
-          email: message.trim(),
-          updated_at: new Date().toISOString(),
-        })
-        .eq("id", h.id);
-      await s
-        .from("conversation_sessions")
-        .update({
-          state: "ready",
-          context: {},
-        })
-        .eq("id", session.data.id);
-      h = { ...h, email: message.trim() };
-      const checkout = await startProCheckout(url, k, phone);
-      if (checkout.body?.payment_url) {
-        return json({
-          ok: true,
-          reply: `Your secure Pro payment link is ready:\n${checkout.body.payment_url}\n\nPro activates automatically after Paystack confirms payment.`,
-          ui: dashboardUi(),
-        });
-      }
-      return json({
-        ok: true,
-        reply: checkout.body?.already_active
-          ? "Your Pro access is already active."
-          : "I couldn't create the payment link right now. Please try again shortly.",
-        ui: dashboardUi(),
-      });
-    }
-    if (session.data?.state === "handyman_router_add_area") {
-      const loc = parseLocation(message);
-      if (!loc) {
-        return json({
-          ok: true,
-          reply:
-            "Please send Suburb, City, Province. Example: Bellville, Cape Town, Western Cape",
-        });
-      }
-      await s
-        .from("conversation_sessions")
-        .update({
-          state: "handyman_router_area_scope",
-          context: { pending_area: loc },
-        })
-        .eq("id", session.data.id);
-      return json({
-        ok: true,
-        reply: `Area: ${loc.suburb}, ${loc.city}. How broadly do you work?`,
-        ui: {
-          type: "buttons",
-          body: "Service coverage",
-          buttons: [
-            { id: "H_AREA_SCOPE:suburb", title: "This suburb" },
-            {
-              id: "H_AREA_SCOPE:city",
-              title: "Whole city",
-            },
-            { id: "H_AREA_SCOPE:province", title: "Province" },
-          ],
-        },
-      });
-    }
+
+    if (doc.error) throw doc.error;
+
+    // Auto-approval is allowed only after the legacy upload path has already
+    // archived a non-empty supported document and recorded its evidence hash.
     if (
-      message.startsWith("H_AREA_SCOPE:") &&
-      session.data?.state === "handyman_router_area_scope"
+      doc.data?.id &&
+      doc.data.status === "pending" &&
+      doc.data.storage_path &&
+      doc.data.sha256 &&
+      Number(doc.data.byte_size ?? 0) > 0 &&
+      ["image/jpeg", "image/png", "application/pdf"].includes(String(doc.data.mime_type ?? ""))
     ) {
-      const coverage = message.split(":")[1];
-      const loc = session.data.context?.pending_area;
-      if (!loc || !["suburb", "city", "province"].includes(coverage)) {
-        return json({
-          ok: true,
-          reply: "That area setup expired. Open Service areas and try again.",
-          ui: dashboardUi(),
-        });
-      }
-      const ins = await s.from("service_areas").insert({
-        handyman_id: h.id,
-        suburb: loc.suburb,
-        city: loc.city,
-        province: loc.province,
-        coverage_type: coverage,
-      });
-      if (ins.error && ins.error.code !== "23505") throw ins.error;
-      await s
-        .from("conversation_sessions")
+      const now = new Date().toISOString();
+      const approved = await s.from("handyman_verification_documents")
         .update({
-          state: "ready",
-          context: {},
+          status: "approved",
+          reviewed_at: now,
+          review_notes:
+            "Auto-approved after secure document archive, supported MIME/size validation and SHA-256 evidence capture. No manual authenticity review performed.",
         })
-        .eq("id", session.data.id);
+        .eq("id", doc.data.id)
+        .eq("status", "pending");
+      if (approved.error) throw approved.error;
+
       return json({
         ok: true,
-        reply: `Service area added: ${loc.suburb}, ${loc.city} (${coverage}).`,
-        ui: dashboardUi(),
-      });
-    }
-    if (
-      ["hi", "hello", "menu", "start", "HANDYMAN_HOME"].includes(message) ||
-      ["hi", "hello", "menu", "start"].includes(norm(message))
-    ) {
-      return json({
-        ok: true,
-        reply: `Welcome back, ${h.full_name}.\nAvailability: ${h.availability_status}\nRating: ${
-          h.average_rating ?? 0
-        }/5 · ${
-          h.completed_jobs ?? 0
-        } completed\nVerification: ${h.verification_status}`,
-        ui: dashboardUi(),
-      });
-    }
-    if (message === "H_VERIFY") {
-      const docs = await s
-        .from("handyman_verification_documents")
-        .select("document_type,status,submitted_at,review_notes")
-        .eq("handyman_id", h.id)
-        .order("submitted_at", { ascending: false })
-        .limit(5);
-      if (h.verification_status === "verified") {
-        return json({
-          ok: true,
-          reply:
-            "Verification: Verified ✓\nYour profile is eligible to receive matching job opportunities.",
-          ui: dashboardUi(),
-        });
-      }
-      if (h.verification_status === "pending") {
-        return json({
-          ok: true,
-          reply: `Verification: Pending review\n${
-            docs.data?.length
-              ? "Your identity document has been received."
-              : "Your submission is being reviewed."
-          }`,
-          ui: dashboardUi(),
-        });
-      }
-      return json({
-        ok: true,
+        verification_method: "automatic_document_acceptance",
         reply:
-          h.verification_status === "rejected"
-            ? "Verification needs attention. You can submit a new identity document for review."
-            : "Verify your identity to unlock job opportunities. Attach a clear photo or document of your SA ID, passport or valid permit.",
-        ui: {
-          type: "buttons",
-          body: "Verification",
-          buttons: [
-            { id: "H_SUBMIT_ID", title: "Submit ID" },
-            {
-              id: "HANDYMAN_HOME",
-              title: "Dashboard",
-            },
-          ],
-        },
-      });
-    }
-    if (message === "H_SUBMIT_ID") {
-      if (session.data?.id) {
-        await s
-          .from("conversation_sessions")
-          .update({
-            state: "handyman_router_verification_document",
-            context: {},
-          })
-          .eq("id", session.data.id);
-      }
-      return json({
-        ok: true,
-        reply:
-          "Attach a clear photo or document of your South African ID, passport or valid permit. For your security, do not type the ID/passport number into chat.",
-      });
-    }
-    if (message === "H_AVAIL") {
-      if (h.verification_status !== "verified") {
-        return json({
-          ok: true,
-          reply:
-            "You can set availability after your identity is verified. This prevents unverified providers from receiving customer opportunities.",
-          ui: {
-            type: "buttons",
-            body: "Complete verification",
-            buttons: [
-              { id: "H_VERIFY", title: "Verification" },
-              {
-                id: "HANDYMAN_HOME",
-                title: "Dashboard",
-              },
-            ],
-          },
-        });
-      }
-      if (h.active_job_id || h.availability_status === "busy") {
-        return json({
-          ok: true,
-          reply:
-            "Availability is locked to Busy while Current job is active. It unlocks automatically when the customer confirms completion or the job is released.",
-          ui: {
-            type: "buttons",
-            body: "Availability · Busy",
-            buttons: [
-              { id: "H_CURRENT", title: "Current job" },
-              {
-                id: "H_NEW",
-                title: "New jobs",
-              },
-              { id: "HANDYMAN_HOME", title: "Dashboard" },
-            ],
-          },
-        });
-      }
-      if (
-        h.availability_cooldown_until &&
-        new Date(h.availability_cooldown_until) > new Date()
-      ) {
-        return json({
-          ok: true,
-          reply: `Availability is temporarily paused after a provider cancellation. It unlocks at ${new Intl.DateTimeFormat(
-            "en-ZA",
-            {
-              timeZone: "Africa/Johannesburg",
-              hour: "2-digit",
-              minute: "2-digit",
-            },
-          ).format(new Date(h.availability_cooldown_until))}.`,
-          ui: {
-            type: "buttons",
-            body: "Availability · Cool-down",
-            buttons: [
-              { id: "H_NEW", title: "Browse jobs" },
-              {
-                id: "HANDYMAN_HOME",
-                title: "Dashboard",
-              },
-            ],
-          },
-        });
-      }
-      return json({
-        ok: true,
-        reply: `Current availability: ${h.availability_status}.`,
+          "Document received securely. Verification approved ✅ You can now set your availability and receive matching job opportunities.",
         ui: availabilityUi(),
       });
     }
-    if (message.startsWith("H_AVAIL:")) {
-      if (h.verification_status !== "verified") {
-        return json({
-          ok: true,
-          reply:
-            "Verification is required before you can go available for customer jobs.",
-          ui: dashboardUi(),
-        });
-      }
-      if (h.active_job_id || h.availability_status === "busy") {
-        return json({
-          ok: true,
-          reply: "You cannot override Busy while Current job is active.",
-          ui: {
-            type: "buttons",
-            body: "Availability locked",
-            buttons: [
-              { id: "H_CURRENT", title: "Current job" },
-              {
-                id: "HANDYMAN_HOME",
-                title: "Dashboard",
-              },
-            ],
-          },
-        });
-      }
-      const hours = Math.max(
-        1,
-        Math.min(12, Number(message.split(":")[1]) || 8),
-      );
-      const r = await s.rpc("set_handyman_availability", {
-        p_phone: phone,
-        p_status: "available",
-        p_hours: hours,
-      });
-      if (r.error) {
-        if (String(r.error.message).includes("provider_cooldown")) {
-          return json({
-            ok: true,
-            reply:
-              "Availability is still in its cancellation cool-down period.",
-            ui: dashboardUi(),
-          });
-        }
-        throw r.error;
-      }
-      const waiting = await s.rpc("offer_waiting_jobs_to_handyman", {
-        p_phone: phone,
-        p_limit: 5,
-      });
-      if (waiting.error) throw waiting.error;
-      const jobs = waiting.data ?? [];
-      if (jobs.length) {
-        const j = jobs[0];
-        return json({
-          ok: true,
-          reply: `You're available for ${hours} hours. I found ${jobs.length} matching opportunity${
-            jobs.length === 1 ? "" : "ies"
-          }.\n\n${j.skill_name}: ${j.description}\n${j.suburb}, ${j.city}`,
-          ui: {
-            type: "buttons",
-            body: "Would you like this job?",
-            buttons: [
-              { id: `HJOB_MATCH:${j.match_id}`, title: "View job" },
-              {
-                id: "H_NEW",
-                title: "New jobs",
-              },
-              { id: "HANDYMAN_HOME", title: "Dashboard" },
-            ],
-          },
-        });
-      }
-      return json({
-        ok: true,
-        reply: `You're available for the next ${hours} hours. Relevant jobs can now be offered automatically.`,
-        ui: dashboardUi(),
-      });
-    }
-    if (message === "H_OFFLINE") {
-      if (h.active_job_id || h.availability_status === "busy") {
-        return json({
-          ok: true,
-          reply:
-            "You cannot go offline while Current job is active. Complete or release the job first.",
-          ui: {
-            type: "buttons",
-            body: "Availability locked",
-            buttons: [
-              { id: "H_CURRENT", title: "Current job" },
-              {
-                id: "HANDYMAN_HOME",
-                title: "Dashboard",
-              },
-            ],
-          },
-        });
-      }
-      const r = await s.rpc("set_handyman_availability", {
-        p_phone: phone,
-        p_status: "offline",
-        p_hours: 8,
-      });
-      if (r.error) throw r.error;
-      return json({
-        ok: true,
-        reply:
-          "You're offline. You won't receive new job offers until you go available again.",
-        ui: dashboardUi(),
-      });
-    }
-    if (message === "H_JOBS") {
-      const d = await delegate(url, k, input, "MY_JOBS");
-      return json(d.body, d.status);
-    }
-    if (message === "H_PROFILE") {
-      const areas = await s
-        .from("service_areas")
-        .select("suburb,city,province,coverage_type")
-        .eq("handyman_id", h.id);
-      const hs = await s
-        .from("handyman_skills")
-        .select("skill_id")
-        .eq("handyman_id", h.id);
-      const ids = (hs.data ?? []).map((x: any) => x.skill_id);
-      const skills = ids.length
-        ? await s.from("skills").select("id,name").in("id", ids)
-        : { data: [] };
-      return json({
-        ok: true,
-        reply: `${h.full_name}${
-          h.business_name ? ` · ${h.business_name}` : ""
-        }\nEmail: ${
-          h.email ?? "Not set"
-        }\nVerification: ${h.verification_status}\nRating: ${
-          h.average_rating ?? 0
-        }/5 (${h.completed_jobs ?? 0} completed)\nSkills: ${
-          (skills.data ?? []).map((x: any) => x.name).join(", ") || "None"
-        }\nAreas: ${
-          (areas.data ?? [])
-            .map((a: any) => `${a.suburb}, ${a.city} (${a.coverage_type})`)
-            .join("; ") || "None"
-        }`,
-        ui: profileUi(),
-      });
-    }
-    if (message === "H_SKILLS") {
-      return json({
-        ok: true,
-        reply: "Your profile can contain multiple genuine skills.",
-        ui: await skillMenu(s, 0),
-      });
-    }
-    if (message.startsWith("H_SKILL_PAGE:")) {
-      return json({
-        ok: true,
-        reply: "Choose another service.",
-        ui: await skillMenu(s, Number(message.split(":")[1]) || 0),
-      });
-    }
-    if (message.startsWith("H_ADD_SKILL:")) {
-      const code = message.slice(12);
-      const sk = await s
-        .from("skills")
-        .select("id,name")
-        .eq("code", code)
-        .maybeSingle();
-      if (!sk.data) {
-        return json({
-          ok: true,
-          reply: "That service is unavailable.",
-          ui: await skillMenu(s, 0),
-        });
-      }
-      const ins = await s.from("handyman_skills").insert({
-        handyman_id: h.id,
-        skill_id: sk.data.id,
-      });
-      if (ins.error && ins.error.code !== "23505") throw ins.error;
-      return json({
-        ok: true,
-        reply: `${sk.data.name} added to your profile.`,
-        ui: dashboardUi(),
-      });
-    }
-    if (message === "H_AREAS") {
-      const a = await s
-        .from("service_areas")
-        .select("suburb,city,province,coverage_type")
-        .eq("handyman_id", h.id);
-      return json({
-        ok: true,
-        reply: (a.data ?? []).length
-          ? `Your service areas:\n${(a.data ?? [])
-              .map((x: any) => `• ${x.suburb}, ${x.city} — ${x.coverage_type}`)
-              .join("\n")}`
-          : "You haven't added a service area yet.",
-        ui: {
-          type: "buttons",
-          body: "Service areas",
-          buttons: [
-            { id: "H_ADD_AREA", title: "Add area" },
-            {
-              id: "HANDYMAN_HOME",
-              title: "Dashboard",
-            },
-          ],
-        },
-      });
-    }
-    if (message === "H_ADD_AREA") {
-      if (session.data?.id) {
-        await s
-          .from("conversation_sessions")
-          .update({
-            state: "handyman_router_add_area",
-            context: {},
-          })
-          .eq("id", session.data.id);
-      }
-      return json({
-        ok: true,
-        reply:
-          "Send a place you work in as: Suburb, City, Province. Example: Bellville, Cape Town, Western Cape",
-      });
-    }
-    if (message === "H_PLAN") {
-      const e = await s
-        .from("entitlements")
-        .select("entitlement_type,status,valid_until")
-        .eq("handyman_id", h.id)
-        .eq("status", "active");
-      const usage = await s
-        .from("job_matches")
-        .select("id", {
-          count: "exact",
-          head: true,
-        })
-        .eq("handyman_id", h.id)
-        .gte(
-          "offered_at",
-          new Date(
-            new Date().getFullYear(),
-            new Date().getMonth(),
-            1,
-          ).toISOString(),
-        );
-      const pro = (e.data ?? []).some(
-        (x: any) =>
-          x.entitlement_type === "pro_access" &&
-          (!x.valid_until || new Date(x.valid_until) > new Date()),
-      );
-      const used = usage.count ?? 0;
-      if (pro) {
-        return json({
-          ok: true,
-          reply: `Plan: Pro\nOpportunities this month: ${used}\nLimit: Unlimited while Pro is active`,
-          ui: dashboardUi(),
-        });
-      }
-      return json({
-        ok: true,
-        reply: `Plan: Free\nOpportunities used this month: ${used}/3\nRemaining: ${Math.max(
-          0,
-          3 - used,
-        )}\n\nAfter 3 genuine opportunities, matching pauses until next month or you upgrade. Pro is R99/month.`,
-        ui: {
-          type: "buttons",
-          body: "Plan options",
-          buttons: [
-            { id: "H_UPGRADE_PRO", title: "Upgrade to Pro" },
-            {
-              id: "HANDYMAN_HOME",
-              title: "Dashboard",
-            },
-          ],
-        },
-      });
-    }
-    if (message === "H_UPGRADE_PRO") {
-      if (!h.email) {
-        if (session.data?.id) {
-          await s
-            .from("conversation_sessions")
-            .update({
-              state: "handyman_router_billing_email",
-              context: {},
-            })
-            .eq("id", session.data.id);
-        }
-        return json({
-          ok: true,
-          reply:
-            "What email address should we use for payment and subscription receipts?",
-        });
-      }
-      const checkout = await startProCheckout(url, k, phone);
-      if (checkout.body?.payment_url) {
-        return json({
-          ok: true,
-          reply: `Your secure Pro payment link is ready:\n${checkout.body.payment_url}\n\nPro activates automatically after Paystack confirms payment.`,
-          ui: dashboardUi(),
-        });
-      }
-      return json({
-        ok: true,
-        reply: checkout.body?.already_active
-          ? "Your Pro access is already active."
-          : "I couldn't create the payment link right now. Please try again shortly.",
-        ui: dashboardUi(),
-      });
-    }
-    const d = await delegate(url, k, input);
-    return json(d.body, d.status);
-  } catch (e) {
-    console.error(e);
-    return json({ error: "internal_error" }, 500);
+  } catch (error) {
+    console.error("automatic verification approval failed", error);
   }
+
+  // If automation cannot prove the evidence preconditions, keep the safer
+  // pending response from the established verification flow.
+  return new Response(text, {
+    status: upstream.status,
+    headers: { "content-type": "application/json; charset=utf-8" },
+  });
 });

@@ -12,65 +12,147 @@ type Incoming = {
 };
 
 const json = (body: unknown, status = 200) =>
-  new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json; charset=utf-8" } });
+  new Response(JSON.stringify(body), {
+    status,
+    headers: { "content-type": "application/json; charset=utf-8" },
+  });
 
 function key() {
   const raw = Deno.env.get("SUPABASE_SECRET_KEYS") ?? "";
   if (raw) {
-    try { const parsed = JSON.parse(raw); if (typeof parsed.default === "string") return parsed.default; } catch {}
+    try {
+      const parsed = JSON.parse(raw);
+      if (typeof parsed.default === "string") return parsed.default;
+    } catch {}
   }
   return Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
 }
 
 async function callLegacy(url: string, secret: string, input: Incoming) {
-  return await fetch(`${url}/functions/v1/job-intake-router-legacy`, {
+  const response = await fetch(`${url}/functions/v1/job-intake-router-legacy`, {
     method: "POST",
     headers: { apikey: secret, "content-type": "application/json" },
     body: JSON.stringify(input),
   });
+  const text = await response.text();
+  let body: any = {};
+  try { body = JSON.parse(text); } catch { body = { error: "invalid_legacy_response" }; }
+  return { response, body };
 }
 
 Deno.serve(async (request) => {
   if (request.method !== "POST") return json({ error: "method_not_allowed" }, 405);
+
   const secret = key();
   const url = Deno.env.get("SUPABASE_URL") ?? "";
-  if (!secret || !url || request.headers.get("apikey") !== secret) return json({ error: "unauthorized" }, 401);
+  if (!secret || !url || request.headers.get("apikey") !== secret) {
+    return json({ error: "unauthorized" }, 401);
+  }
 
   let input: Incoming;
-  try { input = await request.json(); } catch { return json({ error: "invalid_json" }, 400); }
+  try {
+    input = await request.json();
+  } catch {
+    return json({ error: "invalid_json" }, 400);
+  }
 
   const phone = input.external_user_id?.trim();
   const message = input.message?.trim() ?? "";
   let forwarded: Incoming = input;
-  let state: string | null = null;
+  let sessionState = "";
+  let customerHasName = false;
 
   if (phone && message) {
-    const supabase = createClient(url, secret, { auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false } });
-    const session = await supabase.from("conversation_sessions").select("state").eq("channel", input.channel ?? "whatsapp").eq("external_user_id", phone).maybeSingle();
-    state = !session.error ? session.data?.state ?? null : null;
+    const supabase = createClient(url, secret, {
+      auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false },
+    });
 
-    if (state === "ji_location") {
+    const [session, customer] = await Promise.all([
+      supabase
+        .from("conversation_sessions")
+        .select("state")
+        .eq("channel", input.channel ?? "whatsapp")
+        .eq("external_user_id", phone)
+        .maybeSingle(),
+      supabase
+        .from("customers")
+        .select("full_name")
+        .eq("phone", phone)
+        .maybeSingle(),
+    ]);
+
+    if (!session.error) sessionState = String(session.data?.state ?? "");
+    if (!customer.error) customerHasName = Boolean(customer.data?.full_name);
+
+    if (sessionState === "ji_location") {
       const location = parseHumanLocation(message);
       if (location && !location.needsCity && location.city) {
-        forwarded = { ...input, message: [location.suburb, location.city, location.province].filter(Boolean).join(", ") };
+        forwarded = {
+          ...input,
+          message: [location.suburb, location.city, location.province]
+            .filter(Boolean)
+            .join(", "),
+        };
       }
+    }
+
+    // First-time customers can now provide their name as the explicit consent
+    // action. The router performs the legacy Accept + name sequence internally,
+    // reducing two user actions to one while retaining affirmative consent.
+    if (
+      sessionState === "ji_consent" &&
+      !customerHasName &&
+      !message.startsWith("JI_") &&
+      message.replace(/\s+/g, " ").trim().length >= 2 &&
+      message.replace(/\s+/g, " ").trim().length <= 80
+    ) {
+      const accepted = await callLegacy(url, secret, {
+        ...input,
+        external_message_id: undefined,
+        message: "JI_ACCEPT_TERMS",
+      });
+      if (!accepted.response.ok) {
+        return new Response(JSON.stringify(accepted.body), {
+          status: accepted.response.status,
+          headers: { "content-type": "application/json; charset=utf-8" },
+        });
+      }
+      const completed = await callLegacy(url, secret, input);
+      return new Response(JSON.stringify(completed.body), {
+        status: completed.response.status,
+        headers: { "content-type": "application/json; charset=utf-8" },
+      });
     }
   }
 
-  let legacy = await callLegacy(url, secret, forwarded);
+  const legacy = await callLegacy(url, secret, forwarded);
 
-  // For a fresh request, timing is the last service-detail question. Photo and
-  // review are optional friction, so skip both and proceed directly to the
-  // existing consent/readiness boundary. Existing customers can therefore go
-  // live immediately; new customers see terms/name only once before publish.
-  const timingCompleted =
-    (state === "ji_urgency" && ["JI_URGENT", "JI_FLEXIBLE"].includes(message)) ||
-    (state === "ji_time" && ["JI_TIME_MORNING", "JI_TIME_AFTERNOON", "JI_TIME_EVENING", "JI_TIME_ANY"].includes(message));
-
-  if (timingCompleted && legacy.ok) {
-    legacy = await callLegacy(url, secret, { ...input, message: "JI_SKIP_PHOTO" });
-    if (legacy.ok) legacy = await callLegacy(url, secret, { ...input, message: "JI_SUBMIT" });
+  // If a first-time customer reaches consent, present a single clear action:
+  // replying with their name both accepts the published Terms/Privacy notice
+  // and submits the request. Existing customers keep the one-tap consent button.
+  if (
+    !customerHasName &&
+    legacy.body?.ui?.buttons?.some((button: any) => button?.id === "JI_ACCEPT_TERMS")
+  ) {
+    const body = [
+      "Before we send your request",
+      "HandyConnect connects you with independent service providers. Agree the work, price and timing before work starts.",
+      "",
+      "Terms: https://robertmatiwa1.github.io/HandyConnect/terms/",
+      "Privacy: https://robertmatiwa1.github.io/HandyConnect/privacy/",
+      "",
+      "To accept these Terms and submit your request, reply with your name (for example: Robert).",
+    ].join("\n");
+    legacy.body.reply = body;
+    legacy.body.ui = {
+      type: "buttons",
+      body,
+      buttons: [{ id: "JI_TERMS_NOT_NOW", title: "Not now" }],
+    };
   }
 
-  return new Response(await legacy.text(), { status: legacy.status, headers: { "content-type": "application/json; charset=utf-8" } });
+  return new Response(JSON.stringify(legacy.body), {
+    status: legacy.response.status,
+    headers: { "content-type": "application/json; charset=utf-8" },
+  });
 });

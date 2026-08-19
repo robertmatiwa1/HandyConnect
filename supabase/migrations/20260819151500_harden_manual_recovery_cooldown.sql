@@ -1,6 +1,7 @@
 create or replace function public.guard_notification_recovery_cooldown()
 returns trigger
 language plpgsql
+set search_path=pg_catalog,public
 as $function$
 begin
   if new.recipient_phone is null then return new; end if;

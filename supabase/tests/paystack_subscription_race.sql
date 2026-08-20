@@ -13,7 +13,7 @@ declare
   v_result jsonb;
 begin
   insert into public.handymen(phone,email,status,verification_status,full_name)
-  values('27999999991',v_email,'active','verified','Paystack Race Test')
+  values('27999999991',v_email,'active','unverified','Paystack Race Test')
   returning id into v_handyman;
 
   insert into public.payment_events(provider,provider_event_id,event_type,payload,received_at,processed_at)

@@ -7,6 +7,7 @@ on:
       - 'supabase/config.toml'
       - 'supabase/functions/**'
       - 'supabase/migrations/**'
+      - 'supabase/tests/**'
       - 'tests/conversation-transcripts/**'
       - 'tests/conversations/**'
       - '.github/workflows/conversation-regression.yml'
@@ -15,6 +16,7 @@ on:
       - 'supabase/config.toml'
       - 'supabase/functions/**'
       - 'supabase/migrations/**'
+      - 'supabase/tests/**'
       - 'tests/conversation-transcripts/**'
       - 'tests/conversations/**'
       - '.github/workflows/conversation-regression.yml'
@@ -67,14 +69,22 @@ jobs:
       - name: Rebuild database from migrations
         run: supabase db reset --local
 
-      - name: Run database hardening smoke tests
+      - name: Resolve local database URL
+        id: db
+        shell: bash
         run: |
           DB_URL=$(supabase status -o env | sed -n 's/^DB_URL=//p' | tr -d '"')
           if [ -z "$DB_URL" ]; then
             echo "Could not resolve local Supabase DB_URL"
             exit 1
           fi
-          psql "$DB_URL" -v ON_ERROR_STOP=1 -f tests/conversations/local-db-smoke.sql
+          echo "db_url=$DB_URL" >> "$GITHUB_OUTPUT"
+
+      - name: Run database hardening smoke tests
+        run: psql "${{ steps.db.outputs.db_url }}" -v ON_ERROR_STOP=1 -f tests/conversations/local-db-smoke.sql
+
+      - name: Run Paystack subscription race regression
+        run: psql "${{ steps.db.outputs.db_url }}" -v ON_ERROR_STOP=1 -f supabase/tests/paystack_subscription_race.sql
 
       - name: Stop local Supabase
         if: always()

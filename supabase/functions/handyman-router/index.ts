@@ -1,3 +1,5 @@
+import { createClient } from "@supabase/supabase-js";
+
 type Incoming = {
   channel?: "whatsapp" | "test" | "admin";
   external_user_id?: string;
@@ -37,6 +39,49 @@ Deno.serve(async (req) => {
     input = await req.json();
   } catch {
     return json({ error: "invalid_json" }, 400);
+  }
+
+  const phone = input.external_user_id?.trim() ?? "";
+  const message = input.message?.trim() ?? "";
+
+  // Explicit upload action emitted by the verification UI. Preserve all
+  // existing onboarding/profile progress and only move the conversation into
+  // the document-receipt state. Consent and verification decisions remain
+  // entirely user/reviewer controlled.
+  if (phone && message === "H_MEDIA_UPLOAD") {
+    const s = createClient(url, secret, {
+      auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false },
+    });
+
+    const handyman = await s
+      .from("handymen")
+      .select("id,verification_status")
+      .eq("phone", phone)
+      .maybeSingle();
+
+    if (!handyman.error && handyman.data?.id && handyman.data.verification_status !== "verified") {
+      const session = await s
+        .from("conversation_sessions")
+        .select("id")
+        .eq("channel", input.channel ?? "whatsapp")
+        .eq("external_user_id", phone)
+        .maybeSingle();
+
+      if (!session.error && session.data?.id) {
+        const updated = await s
+          .from("conversation_sessions")
+          .update({ state: "handyman_router_verification_document" })
+          .eq("id", session.data.id);
+
+        if (!updated.error) {
+          return json({
+            ok: true,
+            reply:
+              "Please attach a clear photo or document of your South African ID, passport or valid permit. Do not type the number into chat.",
+          });
+        }
+      }
+    }
   }
 
   // Verification policy boundary: the legacy router securely archives identity

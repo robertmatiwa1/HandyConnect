@@ -75,5 +75,27 @@ Deno.serve(async (req) => {
     headers: { apikey: secret, "content-type": "application/json" },
     body: JSON.stringify(forwardedInput),
   });
-  return new Response(await upstream.text(), { status: upstream.status, headers: { "content-type": "application/json; charset=utf-8" } });
+
+  const upstreamText = await upstream.text();
+  if (!upstream.ok) return new Response(upstreamText, { status: upstream.status, headers: { "content-type": "application/json; charset=utf-8" } });
+
+  if (phone) {
+    try {
+      const body = JSON.parse(upstreamText);
+      const refreshed = await s.from("handymen")
+        .select("status,registration_status,terms_accepted_at,profile_completed_at,verification_status")
+        .eq("phone", phone).maybeSingle();
+      const current = refreshed.data;
+      const nowBetaEligible = !!current && current.status === "active" && current.registration_status === "active" && !!current.terms_accepted_at && !!current.profile_completed_at && current.verification_status !== "verified";
+      if (nowBetaEligible && typeof body?.reply === "string" && body.reply.includes("verify your identity before you can receive jobs")) {
+        body.reply = body.reply.replace(
+          "One final step: verify your identity before you can receive jobs. Send a clear photo/PDF of your SA ID, passport or valid permit. We never ask you to type the document number into chat.",
+          "ID verification is optional during the beta. You can receive jobs once you set yourself available. You may upload a clear photo/PDF of your SA ID, passport or valid permit now or do it later. We never ask you to type the document number into chat."
+        );
+        return json(body, upstream.status);
+      }
+    } catch {}
+  }
+
+  return new Response(upstreamText, { status: upstream.status, headers: { "content-type": "application/json; charset=utf-8" } });
 });

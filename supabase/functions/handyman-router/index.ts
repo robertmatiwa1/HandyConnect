@@ -9,100 +9,71 @@ type Incoming = {
 };
 
 const json = (body: unknown, status = 200) =>
-  new Response(JSON.stringify(body), {
-    status,
-    headers: { "content-type": "application/json; charset=utf-8" },
-  });
+  new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json; charset=utf-8" } });
 
 function key() {
   const raw = Deno.env.get("SUPABASE_SECRET_KEYS") ?? "";
   if (raw) {
-    try {
-      const parsed = JSON.parse(raw);
-      if (typeof parsed.default === "string") return parsed.default;
-    } catch {}
+    try { const parsed = JSON.parse(raw); if (typeof parsed.default === "string") return parsed.default; } catch {}
   }
   return Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
 }
 
 Deno.serve(async (req) => {
   if (req.method !== "POST") return json({ error: "method_not_allowed" }, 405);
-
   const secret = key();
   const url = Deno.env.get("SUPABASE_URL") ?? "";
-  if (!secret || !url || req.headers.get("apikey") !== secret) {
-    return json({ error: "unauthorized" }, 401);
-  }
+  if (!secret || !url || req.headers.get("apikey") !== secret) return json({ error: "unauthorized" }, 401);
 
   let input: Incoming;
-  try {
-    input = await req.json();
-  } catch {
-    return json({ error: "invalid_json" }, 400);
-  }
+  try { input = await req.json(); } catch { return json({ error: "invalid_json" }, 400); }
 
   const phone = input.external_user_id?.trim() ?? "";
   const message = input.message?.trim() ?? "";
+  const s = createClient(url, secret, { auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false } });
 
-  // Explicit upload action emitted by the verification UI. Preserve all
-  // existing onboarding/profile progress and only move the conversation into
-  // the document-receipt state. Consent and verification decisions remain
-  // entirely user/reviewer controlled.
-  if (phone && message === "H_MEDIA_UPLOAD") {
-    const s = createClient(url, secret, {
-      auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false },
-    });
+  const handyman = phone ? await s.from("handymen")
+    .select("id,status,registration_status,terms_accepted_at,profile_completed_at,verification_status,active_job_id,availability_status,availability_cooldown_until")
+    .eq("phone", phone).maybeSingle() : { data: null, error: null } as any;
+  const h = handyman.data;
+  const betaEligible = !!h && h.status === "active" && h.registration_status === "active" && !!h.terms_accepted_at && !!h.profile_completed_at;
 
-    const handyman = await s
-      .from("handymen")
-      .select("id,verification_status")
-      .eq("phone", phone)
-      .maybeSingle();
-
-    if (!handyman.error && handyman.data?.id && handyman.data.verification_status !== "verified") {
-      const session = await s
-        .from("conversation_sessions")
-        .select("id")
-        .eq("channel", input.channel ?? "whatsapp")
-        .eq("external_user_id", phone)
-        .maybeSingle();
-
-      if (!session.error && session.data?.id) {
-        const updated = await s
-          .from("conversation_sessions")
-          .update({ state: "handyman_router_verification_document" })
-          .eq("id", session.data.id);
-
-        if (!updated.error) {
-          return json({
-            ok: true,
-            reply:
-              "Please attach a clear photo or document of your South African ID, passport or valid permit. Do not type the number into chat.",
-          });
-        }
-      }
+  if (phone && message === "H_MEDIA_UPLOAD" && h?.verification_status !== "verified") {
+    const session = await s.from("conversation_sessions").select("id").eq("channel", input.channel ?? "whatsapp").eq("external_user_id", phone).maybeSingle();
+    if (!session.error && session.data?.id) {
+      await s.from("conversation_sessions").update({ state: "handyman_router_verification_document" }).eq("id", session.data.id);
+      return json({ ok: true, reply: "ID verification is optional during the beta. If you want to verify now, attach a clear photo or PDF of your South African ID, passport or valid permit. Otherwise return to the dashboard and set your availability." });
     }
   }
 
-  // WhatsApp document/image messages commonly arrive without a text body.
-  // The legacy router historically rejected those before reaching the
-  // verification-document handler. Supply an internal non-consent placeholder
-  // only for media-bearing requests so the existing secure archive flow can run.
-  const forwardedInput: Incoming = input.media?.id && !message
-    ? { ...input, message: "H_MEDIA_UPLOAD" }
-    : input;
+  if (betaEligible && h.verification_status !== "verified" && message === "H_VERIFY") {
+    return json({
+      ok: true,
+      reply: "Your ID is not yet verified. During the HandyConnect beta you can still receive jobs once you set yourself available. You may upload an ID, passport or valid permit now or do it later.",
+      ui: { type: "buttons", body: "Beta access is active", buttons: [
+        { id: "H_MEDIA_UPLOAD", title: "Upload ID" },
+        { id: "H_AVAIL", title: "Set availability" },
+        { id: "HANDYMAN_HOME", title: "Dashboard" }
+      ] }
+    });
+  }
 
-  // Verification policy boundary: the legacy router securely archives identity
-  // evidence and marks the provider pending. Approval must remain an explicit
-  // review decision; this wrapper must never promote pending evidence to approved.
+  if (betaEligible && h.verification_status !== "verified" && message.startsWith("H_AVAIL:")) {
+    if (h.active_job_id || h.availability_status === "busy") return json({ ok: true, reply: "You cannot override Busy while Current job is active." });
+    if (h.availability_cooldown_until && new Date(h.availability_cooldown_until) > new Date()) return json({ ok: true, reply: `Availability is temporarily locked until ${h.availability_cooldown_until}.` });
+    const hours = Number(message.slice("H_AVAIL:".length));
+    if (![2, 4, 8, 12].includes(hours)) return json({ error: "invalid_availability_window" }, 400);
+    const until = new Date(Date.now() + hours * 60 * 60 * 1000).toISOString();
+    const updated = await s.from("handymen").update({ availability_status: "available", available_until: until }).eq("id", h.id);
+    if (updated.error) throw updated.error;
+    return json({ ok: true, reply: `You're available for the next ${hours} hours. Relevant jobs can now be offered automatically. Your profile will be shown as ID not yet verified until verification is completed.` });
+  }
+
+  const forwardedInput: Incoming = input.media?.id && !message ? { ...input, message: "H_MEDIA_UPLOAD" } : input;
   const upstream = await fetch(`${url}/functions/v1/handyman-router-legacy`, {
     method: "POST",
     headers: { apikey: secret, "content-type": "application/json" },
     body: JSON.stringify(forwardedInput),
   });
-
-  return new Response(await upstream.text(), {
-    status: upstream.status,
-    headers: { "content-type": "application/json; charset=utf-8" },
-  });
+  return new Response(await upstream.text(), { status: upstream.status, headers: { "content-type": "application/json; charset=utf-8" } });
 });

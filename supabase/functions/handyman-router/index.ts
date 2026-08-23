@@ -84,13 +84,21 @@ Deno.serve(async (req) => {
     }
   }
 
+  // WhatsApp document/image messages commonly arrive without a text body.
+  // The legacy router historically rejected those before reaching the
+  // verification-document handler. Supply an internal non-consent placeholder
+  // only for media-bearing requests so the existing secure archive flow can run.
+  const forwardedInput: Incoming = input.media?.id && !message
+    ? { ...input, message: "H_MEDIA_UPLOAD" }
+    : input;
+
   // Verification policy boundary: the legacy router securely archives identity
   // evidence and marks the provider pending. Approval must remain an explicit
   // review decision; this wrapper must never promote pending evidence to approved.
   const upstream = await fetch(`${url}/functions/v1/handyman-router-legacy`, {
     method: "POST",
     headers: { apikey: secret, "content-type": "application/json" },
-    body: JSON.stringify(input),
+    body: JSON.stringify(forwardedInput),
   });
 
   return new Response(await upstream.text(), {

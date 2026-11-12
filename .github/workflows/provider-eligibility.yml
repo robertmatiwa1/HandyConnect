@@ -1,0 +1,29 @@
+name: Provider offer eligibility checks
+
+on:
+  pull_request:
+    paths:
+      - 'supabase/functions/notification-dispatcher/**'
+      - 'tests/notification-offer-eligibility.test.mjs'
+      - '.github/workflows/provider-eligibility.yml'
+  push:
+    branches:
+      - fix/beta-offer-eligibility-2026
+    paths:
+      - 'supabase/functions/notification-dispatcher/**'
+      - 'tests/notification-offer-eligibility.test.mjs'
+      - '.github/workflows/provider-eligibility.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Verify beta offer eligibility
+        run: node --test tests/notification-offer-eligibility.test.mjs

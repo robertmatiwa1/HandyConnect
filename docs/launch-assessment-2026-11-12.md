@@ -23,7 +23,7 @@ Continue the **existing Supabase/WhatsApp-first marketplace**. Do not re-introdu
 
 ## Website implementation
 This branch enhances the already-open PR #86 with responsive homeowner and commercial sections, service-discovery copy, a simple WhatsApp-first funnel, accessible navigation, and existing legal policy destinations.
-The link is a deliberate launch gate: in `website/index.html`, set `verifiedWhatsappNumber` to the *currently verified* E.164 digits-only business number after a manual real-world click-to-chat test using separate customer and handyman accounts.
+Live activity is stale: last inbound WhatsApp event 2026-09-12, last outbox record 2026-09-12, last conversation message 2026-08-25, and last payment creation 2026-08-12. ACTIVE_HEALTHY is not proof of current marketplace use.\n\nThe link is a deliberate launch gate: in `website/index.html`, set `verifiedWhatsappNumber` to the *currently verified* E.164 digits-only business number after a manual real-world click-to-chat test using separate customer and handyman accounts.
 The two journeys use distinct prefilled messages but the same WhatsApp system of record. No database credentials or separate booking state are introduced.
 Before promoting `website/index.html` to `site/index.html`: preserve the current reviewer demo at `site/product-review/index.html`, check relative legal links, run preview and accessibility checks, and verify official business claims.
 

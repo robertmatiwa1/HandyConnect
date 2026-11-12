@@ -1,0 +1,26 @@
+[
+  {
+    "business": "Example Property Management",
+    "sector": "property_management",
+    "serviceArea": "Johannesburg",
+    "maintenanceNeed": true,
+    "source": "synthetic",
+    "contactPermission": "unknown"
+  },
+  {
+    "business": "Example Letting Agency",
+    "sector": "letting_agency",
+    "serviceArea": "Potchefstroom",
+    "maintenanceNeed": true,
+    "source": "synthetic",
+    "contactPermission": "consented"
+  },
+  {
+    "business": "Example Retailer",
+    "sector": "retail",
+    "serviceArea": "Unknown",
+    "maintenanceNeed": false,
+    "source": "synthetic",
+    "contactPermission": "unknown"
+  }
+]

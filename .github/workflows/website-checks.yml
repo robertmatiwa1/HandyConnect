@@ -1,0 +1,27 @@
+name: Website landing-page checks
+
+on:
+  pull_request:
+    paths:
+      - 'website/**'
+      - '.github/workflows/website-checks.yml'
+  push:
+    branches:
+      - feature/website-redesign-2026
+    paths:
+      - 'website/**'
+      - '.github/workflows/website-checks.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Check website safety and structure
+        run: node --test website/tests/smoke.test.mjs

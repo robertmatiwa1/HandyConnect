@@ -1,0 +1,20 @@
+name: Splee pilot checks
+on:
+  push:
+    paths:
+      - 'experiments/splee/**'
+      - '.github/workflows/splee-pilot-checks.yml'
+  pull_request:
+    paths:
+      - 'experiments/splee/**'
+      - '.github/workflows/splee-pilot-checks.yml'
+jobs:
+  offline-qualification:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: node --test experiments/splee/qualify.test.mjs
+      - run: node experiments/splee/qualify.mjs experiments/splee/sample-prospects.json

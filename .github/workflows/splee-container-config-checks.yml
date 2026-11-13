@@ -1,0 +1,21 @@
+name: Splee container configuration checks
+on:
+  push:
+    paths:
+      - 'experiments/splee/deploy/**'
+      - '.github/workflows/splee-container-config-checks.yml'
+  pull_request:
+    paths:
+      - 'experiments/splee/deploy/**'
+      - '.github/workflows/splee-container-config-checks.yml'
+permissions:
+  contents: read
+jobs:
+  static:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: node experiments/splee/deploy/check-config.mjs
